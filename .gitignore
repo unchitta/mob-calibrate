@@ -1,0 +1,70 @@
+# --------------------------------------------------
+# Data (local, large, or sensitive)
+# --------------------------------------------------
+# Ignore all data files in examples/data
+examples/data/**
+!examples/data/
+!examples/data/**/
+# Except for directory placeholders / documentation
+# (this is to act as a guide to keep directory structure neat)
+!examples/data/**/README.md
+
+
+# --------------------------------------------------
+# Python bytecode / caches
+# --------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --------------------------------------------------
+# Virtual environments
+# --------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --------------------------------------------------
+# Packaging / build artifacts
+# --------------------------------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --------------------------------------------------
+# Jupyter / IPython
+# --------------------------------------------------
+.ipynb_checkpoints/
+.profile_default/
+ipython_config.py
+
+# --------------------------------------------------
+# OS / editor junk
+# --------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --------------------------------------------------
+# Logs
+# --------------------------------------------------
+*.log
+
+
+# --------------------------------------------------
+# Coverage / testing
+# --------------------------------------------------
+.coverage
+htmlcov/
+.pytest_cache/
+
+# --------------------------------------------------
+# Optional: dotenv / secrets
+# --------------------------------------------------
+.env
+.env.*
