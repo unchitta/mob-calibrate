@@ -171,7 +171,7 @@ def _init_fig(nrows, odd=False, sharex=True, sharey=True, suptitle=None):
 
 def _format_ax(ax, title, xlab=None, ylab=None, xticks=None, xlabs=None):
     ax.set_title(title, fontsize='x-large')
-    if xticks:
+    if xticks is not None:
         ax.set_xticks(xticks)
         ax.set_xticklabels(xlabs, rotation=90)
     ax.set_xlabel(xlab, fontsize='x-large')
