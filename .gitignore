@@ -5,6 +5,8 @@
 examples/data/**
 !examples/data/
 !examples/data/**/
+!examples/data/acs/
+!examples/data/atus/
 # Except for directory placeholders / documentation
 # (this is to act as a guide to keep directory structure neat)
 !examples/data/**/README.md
