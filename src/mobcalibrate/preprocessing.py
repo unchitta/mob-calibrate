@@ -1,11 +1,12 @@
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from .utils import *
 
 
 
-def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold):
+def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold, medoids=None, medoid_thresh=None):
     """
     assign cuebiq users to atus clusters using voting
     within the set of neighest atus respondents
@@ -29,7 +30,7 @@ def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold)
     assigned_cluster_labels = []
     nn_idx = find_nn_idx(dist_matrix, k)
     rng = np.random.default_rng()
-    for i in range(nn_idx.shape[0]):
+    for i in tqdm(range(nn_idx.shape[0])):
         nn = nn_idx[i, :]
         nn_dists = dist_matrix[i, nn]
         nn_clusters = atus_cluster_labels[nn]
@@ -61,6 +62,14 @@ def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold)
         else:
             # else (no ties in # neighbors), assign the majority label
             label = maj_labels[0]
+
+        # Add check for threshold for distance from medoid
+        if medoid_thresh and medoid_thresh:
+            # Compute distance from medoid for Cuebiq obs
+            dm = dist_matrix[i, medoids[label]]
+            if dm > medoid_thresh[label]:
+                assigned_cluster_labels.append(-1)
+                continue
 
         assigned_cluster_labels.append(label)
 

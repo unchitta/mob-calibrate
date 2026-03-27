@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from dataclasses import dataclass, field
-from typing import Union, Optional, List, Tuple, Dict
+from typing import Union, Optional, List, Tuple, Dict, Literal
 
 from .utils import make_joint_code
 from .core import *
@@ -28,6 +28,7 @@ class Calibrator:
     target_pop_tot: int
     geoid_col: str = 'GEOID'
     num_replicates: int = 160
+    mode: Literal["census_only", "behavioural_full", "behavioural_only", "all_with_behavioural_only", "all"] = "behavioural_full"
 
     # RNG
     seed: Optional[int] = None
@@ -62,73 +63,150 @@ class Calibrator:
         self.cdf_row_aligned = cdf_row_aligned
         self.cdf_col_aligned = cdf_col_aligned
 
-        num_data_cols = 5  # weight1, weight2, sampled_row_code, sampled_col_code, joint_strata_code
+        num_data_cols = 6  # weight1, weight_behav, weight2, sampled_row_code, sampled_col_code, joint_strata_code
         self.weights_data = np.empty((tot_replicates, len(self.home_cbgs), num_data_cols), dtype=np.int64)
 
 
-    def _create_weights(self, rng, replicate=0):
+    def _create_weights(self, rng, replicate=0, mode="all"):      
 
         # sample demographics from ACS CBG probabilities
         sampled_row_codes = sample_codes_from_cdf(self.cdf_row_aligned, rng)
         sampled_col_codes = sample_codes_from_cdf(self.cdf_col_aligned, rng)
 
-        # calibrate stage 1 weights
-        weights_stage1, diagnostics_stage1 = stage1_ipf(sampled_row_codes, sampled_col_codes, self.acs_row_margin, self.acs_col_margin, n_iter=10)
+        # check which stages we need to compute
+        need_stage2 = mode in ["behavioural_full", "all_with_behavioural_only", "all"]
+        need_behavioural_only = (mode == "behavioural_only")
+        need_behavioural = (mode == "all_with_behavioural_only")
+
+        # initialize vectors
+        weights_stage1 = None
+        weights_behavioural = None
+        weights_stage2 = None
+
+        # need only behavioural, no need to compute stage1
+        if need_behavioural_only:
+            weights_stage1 = np.full(len(self.assigned_cluster_labels), 1.0 / len(self.assigned_cluster_labels))
+            
+            # calibrate stage 2 weights
+            weights_behavioural, diagnostics_stage2 = stage2_rake(
+                sampled_row_codes,
+                sampled_col_codes,
+                self.num_row_cats,
+                self.num_col_cats,
+                self.assigned_cluster_labels,
+                weights_stage1,
+                self.atus_target_table,
+                factor_clip=None
+            )
+            
+        # need to compute stage1
+        else:
+            # calibrate stage 1 weights
+            weights_stage1, diagnostics_stage1 = stage1_ipf(sampled_row_codes, sampled_col_codes, self.acs_row_margin,
+                                                            self.acs_col_margin, n_iter=10)
+            
+            # also need stage2
+            if need_stage2:
+                # calibrate stage 2 weights
+                weights_stage2, diagnostics_stage2 = stage2_rake(
+                    sampled_row_codes,
+                    sampled_col_codes,
+                    self.num_row_cats,
+                    self.num_col_cats,
+                    self.assigned_cluster_labels,
+                    weights_stage1,
+                    self.atus_target_table,
+                    factor_clip=None
+                )
+            
+            # need behavioural along with stage1
+            if need_behavioural:
+
+                weights_tmp = np.full(len(self.assigned_cluster_labels), 1.0 / len(self.assigned_cluster_labels))
+            
+                # calibrate stage 2 weights
+                weights_behavioural, diagnostics_stage2 = stage2_rake(
+                    sampled_row_codes,
+                    sampled_col_codes,
+                    self.num_row_cats,
+                    self.num_col_cats,
+                    self.assigned_cluster_labels,
+                    weights_tmp,
+                    self.atus_target_table,
+                    factor_clip=None
+                )
+
+        # save weights and associated data from this replicate if they exist
+        # otherwise the dataframe defaults to empty
+        if weights_stage1 is not None:
+            self.weights_data[replicate, :, 0] = np.rint(weights_stage1 * self.target_pop_tot).astype(int)
+        if weights_behavioural  is not None:
+            self.weights_data[replicate, :, 1] = np.rint(weights_behavioural * self.target_pop_tot).astype(int)
+        if weights_stage2.size  is not None:
+            self.weights_data[replicate, :, 2] = np.rint(weights_stage2 * self.target_pop_tot).astype(int)
+        self.weights_data[replicate, :, 3] = sampled_row_codes
+        self.weights_data[replicate, :, 4] = sampled_col_codes
+        self.weights_data[replicate, :, 5] = make_joint_code(sampled_row_codes, sampled_col_codes, self.num_col_cats)
         
-        # calibrate stage 2 weights
-        weights_stage2, diagnostics_stage2 = stage2_rake(
-            sampled_row_codes,
-            sampled_col_codes,
-            self.num_row_cats,
-            self.num_col_cats,
-            self.assigned_cluster_labels,
-            weights_stage1,
-            self.atus_target_table,
-            factor_clip=None
-        )
 
-        # save weights and associated data from this replicate
-        self.weights_data[replicate, :, 0] = np.rint(weights_stage1 * self.target_pop_tot).astype(int)
-        self.weights_data[replicate, :, 1] = np.rint(weights_stage2 * self.target_pop_tot).astype(int)
-        self.weights_data[replicate, :, 2] = sampled_row_codes
-        self.weights_data[replicate, :, 3] = sampled_col_codes
-        self.weights_data[replicate, :, 4] = make_joint_code(sampled_row_codes, sampled_col_codes, self.num_col_cats)
-
-    def create_main_weights(self):
+    def create_main_weights(self, mode="all"):
         s = self.seedseq[0]
         self.spawn_keys[0] = s.spawn_key
         rng = np.random.default_rng(s)
-        self._create_weights(rng, replicate=0)
+        self._create_weights(rng, replicate=0, mode=mode)
     
-    def create_replicate_weights(self):
+    def create_replicate_weights(self, mode="all"):
         if len(self.seedseq) == 1:
             print("num_replicates was set to 0 during initialization, returning without creating replicate weights")
 
         for r, s in enumerate(self.seedseq[1:]):
             self.spawn_keys[r+1] = s.spawn_key
             rng = np.random.default_rng(s)
-            self._create_weights(rng, replicate=r+1)
+            self._create_weights(rng, replicate=r+1, mode=mode)
 
 
-    def weights_data_to_df(self, data):
-        col_names = [
-                'weight1', 
-                'weight2', 
+    def weights_data_to_df(self, data, mode="behavioural_full"):
+        col_names = np.array([
+                'weight_census', 
+                'weight_behavioural_only',
+                'weight_behavioural_full', 
                 'sampled_'+self.acs_row_var_name+'_code',
                 'sampled_'+self.acs_col_var_name+'_code',
                 'sampled_joint_stratum_code'
-                ]
-        return pd.DataFrame(data, columns=col_names).astype(int)
+                ])
 
-    def get_main_weights(self, return_df=True):
+        # return asked weights only
+        # index depends on needed weights
+        if mode == "census_only":
+            idx = [0,3,4,5]
+            data = data[:, idx]
+            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
+        elif mode == "behavioural_full":
+            idx = [2,3,4,5]
+            data = data[:, idx]
+            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
+        elif mode == "behavioural_only":
+            idx = [1,3,4,5]
+            data = data[:, idx]
+            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
+        elif mode == "all":
+            idx = [0,2,3,4,5]
+            data = data[:, idx]
+            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
+        elif mode == "all_with_behavioural_only":
+            return pd.DataFrame(data, columns=col_names).astype(int)
+        
+
+    def get_main_weights(self, return_df=True, mode="behavioural_full"):
         data = self.weights_data[0, :, :]
+
         if return_df:
-            return self.weights_data_to_df(data)
+            return self.weights_data_to_df(data, mode=mode)
         else:
             return data
     
 
-    def _get_weights_by_replicate_id(self, replicate_id, return_df=False):
+    def _get_weights_by_replicate_id(self, replicate_id, return_df=False, mode="behavioural_full"):
         """
         return the weights from the specified replicate along with sampled demographic codes.
         if return_df = True, return the weights as a dataframe
@@ -144,12 +222,12 @@ class Calibrator:
             return
         
         if return_df:
-            return self.weights_data_to_df(data)
+            return self.weights_data_to_df(data, mode=mode)
         else:
             return data
         
 
-    def get_replicate_weights(self, return_df=False):
+    def get_replicate_weights(self, return_df=False, mode="behavioural_full"):
         """
         if return_df = False, return a numpy array with shape 
         (num_replicates, N, weights_data_cols) 
@@ -159,7 +237,7 @@ class Calibrator:
         where the first dataframe is the weights data from replicate 1
         """
         if return_df:
-            return [self._get_weights_by_replicate_id(r, return_df=True) for r in range(1, self.num_replicates+1)]
+            return [self._get_weights_by_replicate_id(r, return_df=True, mode=mode) for r in range(1, self.num_replicates+1)]
         else:
             return self.weights_data[1:, :, :]
     
