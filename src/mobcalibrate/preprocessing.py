@@ -6,6 +6,126 @@ from .utils import weighted_crosstab, align_idx, make_joint_code
 
 
 
+
+# =============== SEQUENCE METRICS FOR CLUSTERING TUS DATA ================
+
+def sequence_metrics(seq, home_label, work_label, all_labels):
+    
+    """
+    Compute behavioural sequence metrics for a single daily activity sequence.
+
+    Args:
+        seq (list): A list of activity labels (e.g. ["Home","Work","Work","Commute"...])
+        home_label (str): Label used for "Home" activity
+        work_label (str): Label used for "Work" activity
+        all_labels (list): list of all possible activity labels in the alphabet
+
+    Returns:
+        dict: A dictionary with metrics
+    """
+
+    from collections import Counter
+
+    ################## HELPERS #####################
+    # Helper: find runs/spells
+    def _compute_runs(sequence):
+        run_lengths = []
+        current_state = sequence[0]
+        current_length = 1
+        for i in range(1, len(sequence)):
+            if sequence[i] == current_state:
+                current_length += 1
+            else:
+                run_lengths.append((current_state, current_length))
+                current_state = sequence[i]
+                current_length = 1
+        run_lengths.append((current_state, current_length))
+        return run_lengths
+
+    # Helper: reciprocity from spells
+    def _compute_reciprocity(runs):
+
+        # <<< MOD: handle single-activity sequences explicitly
+        if len(runs) == 1:
+            state = runs[0][0]
+            edge_counts = Counter({(state, state): 1})
+            return 0.0, dict(edge_counts)
+
+        transitions = [(runs[i][0], runs[i+1][0]) for i in range(len(runs) - 1)]
+        edge_set = set(transitions)
+
+        # Count edges
+        edge_counts = Counter(transitions)
+
+        # ----- Weighted reciprocity -----
+        weighted_mutual = sum(
+            min(w, edge_counts.get((j, i), 0))
+            for (i, j), w in edge_counts.items()
+            if i != j
+        )
+
+        total_weight = sum(
+            w for (i, j), w in edge_counts.items()
+            if i != j
+        )
+
+        weighted_reciprocity = (
+            weighted_mutual / total_weight
+            if total_weight > 0 else 0.0
+        )
+
+        return weighted_reciprocity, dict(edge_counts)
+
+    ###################################
+    
+    # Length
+    n = len(seq)
+
+    # Unique activities
+    distinct = set(seq)
+    num_activities = len(distinct)
+
+    # Activity durations (simple count)
+    counts = Counter(seq)
+    durations = {act: counts[act]/n if act in counts else 0 for act in all_labels}
+
+    # Turnover rate = # of transitions / (length - 1)
+    transitions = sum(1 for i in range(1, n) if seq[i] != seq[i - 1])
+    turnover_rate = transitions / (n - 1) if n > 1 else 0
+
+    # Reciprocity
+    runs = _compute_runs(seq)
+    reciprocity, edges = _compute_reciprocity(runs)
+
+    # initialize results dict
+    res = {
+        "num_activities": num_activities,
+        "turnover_rate": turnover_rate,
+        "reciprocity": reciprocity
+    }
+
+    # Durations as Time Use
+    for k, v in durations.items():
+        res[k] = v
+
+    # Edges
+    for k, v in edges.items():
+        res[f"edge_{k}"] = v
+
+    return res
+
+
+def compute_metrics_for_all_sequences(sequences, home_label, work_label, all_labels):
+    metrics = []
+    for s in sequences:
+        m = sequence_metrics(s, home_label, work_label, all_labels)
+        metrics.append(m)
+    seq_metrics = pd.DataFrame(metrics).fillna(0)
+
+    return seq_metrics
+
+
+
 # =============== WEIGHTED K-MEDOIDS FUNCTIONS FOR CLUSTERING TUS DATA =================
 
 def weighted_kmedoids(
