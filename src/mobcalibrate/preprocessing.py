@@ -116,6 +116,10 @@ def sequence_metrics(seq, home_label, work_label, all_labels):
 
 
 def compute_metrics_for_all_sequences(sequences, home_label, work_label, all_labels):
+    """
+    Runs sequence_metrics() for each seq in sequences
+    Returns a DataFrame with each row containing metrics of the corresponding row in sequences
+    """
     metrics = []
     for s in sequences:
         m = sequence_metrics(s, home_label, work_label, all_labels)
@@ -123,6 +127,18 @@ def compute_metrics_for_all_sequences(sequences, home_label, work_label, all_lab
     seq_metrics = pd.DataFrame(metrics).fillna(0)
 
     return seq_metrics
+
+
+def metrics_cosine_D(metrics_df1, metrics_df2):
+    """
+    computes pairwise cosine distances between two sets 
+    of sequences on the basis of sequence metrics
+
+    returns an array of shape len(metrics_df1) x len(metrics_df2)
+    """
+    from sklearn.metrics.pairwise import pairwise_distances
+    cosine_D = pairwise_distances(metrics_df1, metrics_df2, metric='cosine')
+    return cosine_D
 
 
 
