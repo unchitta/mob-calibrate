@@ -1,19 +1,236 @@
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+import tqdm
 
-from .utils import *
+from .utils import weighted_crosstab, align_idx, make_joint_code
 
+
+
+# =============== WEIGHTED K-MEDOIDS FUNCTIONS FOR CLUSTERING TUS DATA =================
+
+def weighted_kmedoids(
+    D, 
+    k, 
+    w=None, 
+    max_iter=200, 
+    tol=1e-6, 
+    init="kmedoids++", 
+    random_state=None, 
+    verbose=False
+):
+    """
+    Weighted K-medoids (PAM) on a precomputed distance matrix.
+
+    Parameters
+    ----------
+    D : (n,n) ndarray
+        Symmetric distance matrix, zeros on diagonal.
+    k : int
+        Number of clusters / medoids.
+    w : (n,) ndarray or None
+        Nonnegative weights per point (survey weights). Defaults to ones.
+    init : {'random','kmedoids++', array-like}
+        Initialization: random, kmedoids++ (weighted), or explicit medoid indices.
+    """
+
+    def _weighted_inertia(D, medoids, w):
+        """Weighted sum of distances to nearest medoid."""
+        # D: (n,n) distance matrix; medoids: list/array of medoid indices; w: (n,)
+        dmin = np.min(D[:, medoids], axis=1)
+        return float((w * dmin).sum())
+
+    def _init_kmedoids_plusplus(D, k, w, rng):
+        """
+        k-medoids++ style initialization using weighted probabilities.
+        Start with a random point ~ weight; then sample others ~ w * (dist-to-nearest)^2.
+        """
+        n = D.shape[0]
+        medoids = []
+        # first medoid: weighted random
+        probs = w / w.sum()
+        m0 = rng.choice(n, p=probs)
+        medoids.append(m0)
+        # subsequent medoids
+        for _ in range(1, k):
+            dmin = np.min(D[:, medoids], axis=1)
+            # probability proportional to weight * distance^2
+            p = w * (dmin ** 2)
+            p_sum = p.sum()
+            if p_sum == 0:
+                # all points coincide w.r.t. chosen medoids; pick random by weight
+                m = rng.choice(n, p=w/w.sum())
+            else:
+                p = p / p_sum
+                m = rng.choice(n, p=p)
+            medoids.append(int(m))
+        return np.array(sorted(set(medoids)))  # guard against duplicates
+
+
+    rng = np.random.default_rng(random_state)
+    n = D.shape[0]
+    if w is None:
+        w = np.ones(n, dtype=float)
+    else:
+        w = np.asarray(w, dtype=float)
+        if np.any(w < 0):
+            raise ValueError("Weights must be nonnegative.")
+        if w.sum() == 0:
+            w = np.ones(n, dtype=float)
+
+    # --- initialize medoids
+    if isinstance(init, (list, np.ndarray)):
+        medoids = np.array(init, dtype=int)
+    elif init == "random":
+        probs = w / w.sum()
+        medoids = rng.choice(n, size=k, replace=False, p=probs)
+    elif init == "kmedoids++":
+        medoids = _init_kmedoids_plusplus(D, k, w, rng)
+        # if duplicates happened, fill up randomly
+        while len(medoids) < k:
+            cand = rng.choice(n, p=w/w.sum())
+            if cand not in medoids:
+                medoids = np.append(medoids, cand)
+    else:
+        raise ValueError("Unknown init")
+
+    # ensure size k
+    if len(medoids) != k:
+        raise ValueError("Initialization did not produce k distinct medoids.")
+
+    # Precompute assignment structures
+    d_to_m = np.min(D[:, medoids], axis=1)
+    nearest_m = medoids[np.argmin(D[:, medoids], axis=1)]
+    inertia = float((w * d_to_m).sum())
+
+    if verbose:
+        print(f"init inertia={inertia:.6f}")
+
+    # --- PAM SWAP loop
+    improved = True
+    it = 0
+    while improved and it < max_iter:
+        improved = False
+        it += 1
+        for mi_idx, mi in enumerate(list(medoids)):
+            # Try swapping out medoid mi with every non-medoid h
+            non_m = [h for h in range(n) if h not in medoids]
+            best_delta = 0.0
+            best_h = None
+
+            for h in non_m:
+                # Compute change in weighted inertia if we swap mi -> h
+                # For each point x, its new distance is min( old-best (unless mi was its best), D[x,h], other medoids )
+                # Efficient computation:
+                # current best distance d1; current second-best distance d2 (w.r.t. current medoids)
+                d_all = D[:, medoids]
+                # obtain second-best distances by masking the column of mi
+                d1 = d_to_m
+                # column index of mi in current medoids:
+                col_mi = mi_idx
+                # second-best = min over all medoids except mi
+                if k > 1:
+                    mask = np.ones(k, dtype=bool)
+                    mask[col_mi] = False
+                    d2 = np.min(d_all[:, mask], axis=1)
+                else:
+                    d2 = np.full(n, np.inf)
+
+                # candidate distance via new medoid h
+                dh = D[:, h]
+                # If mi was not the nearest, new best = min(d1, dh)
+                # If mi was the nearest, new best = min(d2, dh)
+                is_near_mi = (nearest_m == mi)
+                new_best = np.where(is_near_mi, np.minimum(d2, dh), np.minimum(d1, dh))
+
+                delta = (w * (new_best - d1)).sum()   # change in objective
+                if delta < best_delta:
+                    best_delta = delta
+                    best_h = h
+
+            # Apply best swap for this medoid if it improves
+            if best_h is not None and best_delta < -tol:
+                # perform swap
+                medoids[mi_idx] = best_h
+                # update nearest distances and assignments
+                d_to_m = np.min(D[:, medoids], axis=1)
+                nearest_m = medoids[np.argmin(D[:, medoids], axis=1)]
+                inertia += best_delta
+                improved = True
+                if verbose:
+                    print(f"iter {it}: swap {mi} -> {best_h}, inertia={inertia:.6f}")
+
+        if not improved and verbose:
+            print(f"no improving swap at iter {it}, inertia={inertia:.6f}")
+
+    # Final labels
+    labels = np.argmin(D[:, medoids], axis=1)
+    
+    # return dict for medoids {cluster label: medoid}
+    medoids_dict = {j: int(m) for j, m in enumerate(medoids)}
+
+    return medoids_dict, labels, inertia
+
+
+def fit_weighted_kmedoids_with_restarts(
+        D, 
+        wA, 
+        K, 
+        n_restarts=10, 
+        random_state=None, 
+        **kwargs
+    ):
+    """
+    Run weighted_kmedoids several times and keep the best (lowest inertia).
+    kwargs are passed to weighted_kmedoids (e.g., max_iter, tol, init, verbose).
+    """
+    rng = np.random.default_rng(random_state)
+    best = None
+    for r in range(n_restarts):
+        #seed = int(rng.integers(0, 2**31-1))
+        seed = 1097657231
+        medoids_dict, labels, inertia= weighted_kmedoids(
+            D, K, w=wA, random_state=seed, **kwargs
+        )
+        if (best is None) or (inertia < best["inertia"]):
+            best = {"medoids": medoids_dict, "labels": labels, "inertia": inertia, "seed": seed}
+    return best
+
+
+
+# =============== FUNCTIONS FOR ASSIGNING MOBILITY USERS TO TUS CLUSTERS =================
+
+def compute_dist_to_medoid_thresholds(
+    D: np.ndarray,
+    medoids_dict: dict,
+    labels: np.ndarray,
+    percentile: float = 99.0,
+):
+    """
+    Returns
+    -------
+    medoid_thresh : dict
+        {label: percentile distance threshold}
+    """
+    medoid_thresh = {}
+
+    for label, medoid_idx in medoids_dict.items():
+        members = np.where(labels == label)[0]
+        if members.size == 0:
+            continue
+        d = D[members, medoid_idx]
+        medoid_thresh[label] = float(np.percentile(d, percentile))
+
+    return medoid_thresh
 
 
 def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold, medoids=None, medoid_thresh=None):
     """
-    assign cuebiq users to atus clusters using voting
+    assign mobility users to atus clusters using voting
     within the set of neighest atus respondents
 
     at least `assigment_threshold` of the respondents within 
     the nearest respondent set must belong to the same cluster 
-    for the cuebiq user to be assigned to that cluster
+    for the mobility user to be assigned to that cluster
 
     if there are multiple clusters that meet this criterion 
     with ties in the number of nearest respondents,
@@ -77,6 +294,9 @@ def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold,
 
 
 
+# =================================================
+
+
 def compute_atus_target_table(
         atus_df, 
         stratum_var1_col, stratum_var2_col, 
@@ -101,7 +321,6 @@ def compute_atus_target_table(
     )
 
     return atus_target_P, joint
-
 
 
 def get_valid_mask_by_acs_geoid(users_df, acs_cbg_df, geoid_col="GEOID"):
