@@ -180,3 +180,23 @@ def _format_ax(ax, title, xlab=None, ylab=None, xticks=None, xlabs=None):
     ax.legend()
     ax.get_legend().remove()
     return ax
+
+
+def cluster_tempogram_weighted_wrapper(data, W, cluster_labels, suptitle, legend_labels=None):
+
+    # Aesthetics options for tempograms
+    colors = plt.cm.nipy_spectral_r(np.linspace(0, 1, 12))
+    colors = ['lightgrey','orange','red','blue','turquoise','purple','green','black']
+    xticks = [t for t in range(0,48,2)]
+    xlabs = [t for t in range(4,25)] + [t for t in range(1,4)]
+
+    cluster_tempogram_weighted(
+        data, 
+        cluster_labels,
+        W, 
+        colors = colors,
+        xticks = xticks,
+        xlabs = xlabs,
+        legend_labels = legend_labels,
+        suptitle = suptitle,
+        )
