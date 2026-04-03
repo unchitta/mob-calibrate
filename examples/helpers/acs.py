@@ -188,7 +188,7 @@ def invert_group_mapping(group_mapping):
         for raw_label in raw_labels
     }
 
-def merge_acs_tables(tables, on="GEOID", how="inner"):
+def merge_distr_tables(tables, on="GEOID", how="inner", dropna=True):
     """
     Merge a list of processed ACS tables on shared GEOID
 
@@ -215,10 +215,14 @@ def merge_acs_tables(tables, on="GEOID", how="inner"):
     if len(tables) == 1:
         return tables[0].copy()
 
-    return reduce(
+    res = reduce(
         lambda left, right: left.merge(right, on=on, how=how),
         tables
     )
+
+    if dropna:
+        return res.dropna()
+    return res
 
 
 def format_cbsa_marginals(series, var_name, value_name = 'pop'):
