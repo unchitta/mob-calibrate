@@ -8,18 +8,24 @@ def load_acs_table(path, skiprows=None, **kwargs):
 
 def process_income_table(path, group_mapping, last_row_margins=True):
     """
-    Processes ACS B19001 (household income) table and returns a wide DataFrame 
-    containing normalized income group distribution for each GEOID (id_col).
+    Process ACS B19001 (household income) into a wide table of 
+    normalized income-group distributions by GEOID.
 
-    Columns contain the id_col (e.g. GEOID) and each income group in group_mapping.
+    Parameters
+    ----------
+    path : str
+        Path to the ACS table.
+    group_mapping : dict
+        Mapping of income-group labels to ACS columns to aggregate.
+    last_row_margins : bool, default True
+        If True, treat the last row as marginal totals and return them separately.
 
-    If last_row_margins (i.e. last row in the supplied ACS file) corresponds to
-    marginal estimates e.g. at the CBSA level, the function will additionally 
-    return a Series of those estimates grouped accordingly. This is the intended behavior.
-    Otherwise, returns (processed_table, None).
-
-    TODO: 
-    - refactor into another function to allow separate processing of margins in a different ACS table
+    Returns
+    -------
+    table : pd.DataFrame
+        Wide table with GEOID and normalized income-group columns.
+    marginals : pd.Series or None
+        Grouped marginal values if last_row_margins=True, else None.
     """
 
     id_col = "GEOID"
@@ -60,8 +66,26 @@ def process_income_table(path, group_mapping, last_row_margins=True):
 
 def process_age_table(path, group_mapping, drop_groups=None, last_row_margins=True):
     """
-    Processes ACS B01001 (sex by age) table and returns a wide DataFrame 
-    containing normalized age group distribution for each GEOID (id_col).
+    Process ACS B01001 (sex by age) into a wide table of 
+    normalized age-group distributions by GEOID.
+
+    Parameters
+    ----------
+    path : str
+        Path to the ACS table.
+    group_mapping : dict
+        Mapping of age-group labels to lists of detailed ACS age categories.
+    drop_groups : list, optional
+        Age groups to exclude from the output.
+    last_row_margins : bool, default True
+        If True, treat the last row as marginal totals and return them separately.
+
+    Returns
+    -------
+    table : pd.DataFrame
+        Wide table with GEOID and normalized age-group columns.
+    marginals : pd.Series or None
+        Grouped marginal values if last_row_margins=True, else None.
     """
 
     id_col = "GEOID"
@@ -106,12 +130,12 @@ def process_age_table(path, group_mapping, drop_groups=None, last_row_margins=Tr
 
 
 def age_from_sex_by_age_table(table, group_mapping, drop_groups=None):
-    """ Remap age groups into coarse categories
-    The B01001 table is sex by age and there are many joint age categories, 
-    (e.g. "Estimate!!Total:!!Male:!!Under 5 years").
-    Since there are be many columns to combine, it's easier to pivot to long form
-    then split the column names by the delimiter, drop the sex info and remap by age group names
-    then finally do a group-by to sum up the estimates
+    """
+    Aggregate detailed B01001 sex-by-age columns into coarse age groups
+    by reshaping to long form, mapping labels, and summing by GEOID.
+
+    Resulting aggregate age groups are based on the keys in group_mapping.
+    If drop_groups specified, drop the groups from the result.
     """
 
     age = table.copy()
@@ -164,10 +188,42 @@ def invert_group_mapping(group_mapping):
         for raw_label in raw_labels
     }
 
-def merge_acs_tables(tables):
-    return
+def merge_acs_tables(tables, on="GEOID", how="inner"):
+    """
+    Merge a list of processed ACS tables on shared GEOID
+
+    Parameters
+    ----------
+    tables : list[pd.DataFrame]
+        List of wide ACS tables, each with one row per geography.
+    on : str, default "GEOID"
+        Column to merge on.
+    how : str, default "inner"
+        Merge type passed to pd.merge.
+
+    Returns
+    -------
+    pd.DataFrame
+        Merged wide table.
+    """
+    
+    from functools import reduce
+
+    if not tables:
+        raise ValueError("tables must contain at least one DataFrame")
+
+    if len(tables) == 1:
+        return tables[0].copy()
+
+    return reduce(
+        lambda left, right: left.merge(right, on=on, how=how),
+        tables
+    )
 
 
-
-def cbsa_marginals(series, var_name):
-    return
+def format_cbsa_marginals(series, var_name, value_name = 'pop'):
+    """Renames a marginal Series with variable and value labels and returns a DataFrame"""
+    m = series.copy()
+    m.name = value_name
+    m.index.name = var_name
+    return m.reset_index()
