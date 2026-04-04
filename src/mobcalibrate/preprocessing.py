@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import tqdm
+from tqdm import tqdm
 
 from .utils import weighted_crosstab, align_idx, make_joint_code
 
@@ -417,7 +417,7 @@ def knn_cluster_label(k, dist_matrix, atus_cluster_labels, assignment_threshold,
             label = maj_labels[0]
 
         # Add check for threshold for distance from medoid
-        if medoid_thresh and medoid_thresh:
+        if medoids and medoid_thresh:
             # Compute distance from medoid for Cuebiq obs
             dm = dist_matrix[i, medoids[label]]
             if dm > medoid_thresh[label]:
