@@ -12,6 +12,9 @@ from .core import *
 
 @dataclass
 class Calibrator:
+    # optional: include mobility user IDs in outputs
+    unit_ids: Optional[Union[np.ndarray, list]] = None
+
     # Pre-filterd mobility inputs
     home_cbgs: Union[np.ndarray, list]
     assigned_cluster_labels: Union[np.ndarray, list]
@@ -142,7 +145,7 @@ class Calibrator:
             self.weights_data[replicate, :, 0] = np.rint(weights_stage1 * self.target_pop_tot).astype(int)
         if weights_behavioural  is not None:
             self.weights_data[replicate, :, 1] = np.rint(weights_behavioural * self.target_pop_tot).astype(int)
-        if weights_stage2.size  is not None:
+        if weights_stage2 is not None:
             self.weights_data[replicate, :, 2] = np.rint(weights_stage2 * self.target_pop_tot).astype(int)
         self.weights_data[replicate, :, 3] = sampled_row_codes
         self.weights_data[replicate, :, 4] = sampled_col_codes
@@ -177,25 +180,30 @@ class Calibrator:
 
         # return asked weights only
         # index depends on needed weights
+        #### TODO ####
+        # the following should be modified so that weight1 and weight2
+        # are always returned no matter but, while the underlying calculations change
+        # also the naming is very confusing currently
+        ##############
         if mode == "census_only":
             idx = [0,3,4,5]
-            data = data[:, idx]
-            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
         elif mode == "behavioural_full":
             idx = [2,3,4,5]
-            data = data[:, idx]
-            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
         elif mode == "behavioural_only":
             idx = [1,3,4,5]
-            data = data[:, idx]
-            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
         elif mode == "all":
             idx = [0,2,3,4,5]
-            data = data[:, idx]
-            return pd.DataFrame(data, columns=col_names[idx]).astype(int)
         elif mode == "all_with_behavioural_only":
-            return pd.DataFrame(data, columns=col_names).astype(int)
-        
+            idx = list(range(len(col_names)))
+        else:
+            raise ValueError(f"Unknown mode: {mode!r}")
+ 
+        df = pd.DataFrame(data[:, idx], columns=col_names[idx]).astype(int)
+ 
+        if self.user_ids is not None:
+            df.insert(0, 'unit_id', self.unit_ids)
+ 
+        return df
 
     def get_main_weights(self, return_df=True, mode="behavioural_full"):
         data = self.weights_data[0, :, :]
