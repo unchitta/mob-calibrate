@@ -12,8 +12,8 @@ from .core import *
 
 @dataclass
 class Calibrator:
-    # optional: include mobility user IDs in outputs
-    unit_ids: Optional[Union[np.ndarray, list]] = None
+    #  unit IDs to identify mobility individuals or individual-days
+    unit_ids: Optional[Union[np.ndarray, list]]
 
     # Pre-filterd mobility inputs
     home_cbgs: Union[np.ndarray, list]
@@ -199,9 +199,8 @@ class Calibrator:
             raise ValueError(f"Unknown mode: {mode!r}")
  
         df = pd.DataFrame(data[:, idx], columns=col_names[idx]).astype(int)
- 
-        if self.user_ids is not None:
-            df.insert(0, 'unit_id', self.unit_ids)
+        df.insert(0, 'unit_id', self.unit_ids)
+        df.insert(len(df.columns), 'assigned_cluster_label', self.assigned_cluster_labels)
  
         return df
 
