@@ -1,4 +1,7 @@
 import pandas as pd
+import numpy as np
+from pathlib import Path
+
 
 
 def load_acs_table(path, skiprows=None, **kwargs):
@@ -6,7 +9,105 @@ def load_acs_table(path, skiprows=None, **kwargs):
     return table
 
 
-def process_income_table(path, group_mapping, last_row_margins=True):
+# Ordered ACS B19001 income bin columns and dollar values of the upper bound.
+# This will be used to find income quartiles for each CBSA
+# (The last bin (200k+) has no upper bound)
+_B19001_BINS = [
+    ("B19001_002E", 10_000),
+    ("B19001_003E", 15_000),
+    ("B19001_004E", 20_000),
+    ("B19001_005E", 25_000),
+    ("B19001_006E", 30_000),
+    ("B19001_007E", 35_000),
+    ("B19001_008E", 40_000),
+    ("B19001_009E", 45_000),
+    ("B19001_010E", 50_000),
+    ("B19001_011E", 60_000),
+    ("B19001_012E", 75_000),
+    ("B19001_013E", 100_000),
+    ("B19001_014E", 125_000),
+    ("B19001_015E", 150_000),
+    ("B19001_016E", 200_000),
+    ("B19001_017E", float("inf")),
+]
+ 
+def _format_dollar(value):
+    """Format a dollar threshold as short readable string (e.g. 50k for $50,000)"""
+    if value == float("inf"):
+        return None
+    if value >= 1_000:
+        return f"{int(value // 1_000)}k"
+    return str(int(value))
+ 
+ 
+def compute_income_quartile_mapping(table):
+    """
+    Derive a quartile-based income group mapping from a raw ACS B19001 table.
+ 
+    Uses the CBSA-level row (last row) as a weighted frequency distribution
+    to locate the 25th, 50th, and 75th percentile bin boundaries, then
+    assigns ACS columns to four quartile groups accordingly.
+ 
+    Parameters
+    ----------
+    table : pd.DataFrame or path to table
+        Raw ACS B19001 table as loaded from CSV (before any processing)
+        or path to the CSV file downloaded from data.census.gov.
+        The last row must be the CBSA-level aggregate.
+ 
+    Returns
+    -------
+    dict
+        Mapping of quartile labels to lists of ACS column names, in the
+        same format expected by process_income_table's group_mapping argument.
+        Labels are auto-generated from bin boundaries, e.g. '<35k', '35k-75k'.
+    """
+
+    if isinstance(table, (str, Path)):
+        table = load_acs_table(table, skiprows=[1])
+
+    cols = [col for col, _ in _B19001_BINS]
+    upper_bounds = [ub for _, ub in _B19001_BINS]
+ 
+    cbsa_row = table.iloc[-1][cols].apply(pd.to_numeric, errors="coerce").fillna(0).values
+    total = cbsa_row.sum()
+    if total == 0:
+        raise ValueError("CBSA row sums to zero — check that the last row is the CBSA aggregate.")
+ 
+    cdf = cbsa_row.cumsum() / total
+    quartile_thresholds = [0.25, 0.50, 0.75]
+ 
+    # find the bin index whose CDF is closest to each quartile threshold
+    split_indices = []
+    for q in quartile_thresholds:
+        idx = int(np.argmin(np.abs(cdf - q)))
+        split_indices.append(idx)
+ 
+    # deduplicate splits (can happen if one bin spans multiple quartiles)
+    split_indices = sorted(set(split_indices))
+ 
+    # build groups: each group is bins from previous split+1 to current split (inclusive)
+    groups = {}
+    boundaries = [0] + [i + 1 for i in split_indices] + [len(cols)]
+    for i in range(len(boundaries) - 1):
+        start, end = boundaries[i], boundaries[i + 1]
+        group_cols = cols[start:end]
+        lower = upper_bounds[start - 1] if start > 0 else 0
+        upper = upper_bounds[end - 1]
+        lower_str = _format_dollar(lower)
+        upper_str = _format_dollar(upper)
+        if lower == 0:
+            label = f"<{upper_str}"
+        elif upper == float("inf"):
+            label = f"{lower_str}+"
+        else:
+            label = f"{lower_str}-{upper_str}"
+        groups[label] = group_cols
+ 
+    return groups
+
+
+def process_income_table(path, group_mapping=None, last_row_margins=True):
     """
     Process ACS B19001 (household income) into a wide table of 
     normalized income-group distributions by GEOID.
@@ -17,6 +118,8 @@ def process_income_table(path, group_mapping, last_row_margins=True):
         Path to the ACS table.
     group_mapping : dict
         Mapping of income-group labels to ACS columns to aggregate.
+        If None, quartile boundaries are derived automatically from the
+        CBSA-level row via compute_income_quartile_mapping().
     last_row_margins : bool, default True
         If True, treat the last row as marginal totals and return them separately.
 
@@ -29,10 +132,14 @@ def process_income_table(path, group_mapping, last_row_margins=True):
     """
 
     id_col = "GEOID"
-    group_labels = list(group_mapping.keys())
 
     table = load_acs_table(path, skiprows=[1])
     table[id_col] = table["GEO_ID"].str[9:]
+
+    if group_mapping is None:
+        group_mapping = compute_income_quartile_mapping(table)
+
+    group_labels = list(group_mapping.keys())
 
     # select only estimates columns and discard margin of errors
     TOTAL_COL = "B19001_001E" # to be excluded
