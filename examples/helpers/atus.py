@@ -1,9 +1,167 @@
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from copy import deepcopy
 import datetime
 from scipy.stats import mode
 from collections import defaultdict
+
+
+
+# ==================== FUNCTIONS FOR MATCHING INCOME AND AGE GROUPS TO ACS MARGINS ====================
+
+# Ordered ATUS HEFAMINC/HUFAMINC income codes and upper-bound dollar values
+# The last code (16) has no upper bound hence set to inf.
+_HUFAMINC_BINS = [
+    (1,  5_000),
+    (2,  7_500),
+    (3,  10_000),
+    (4,  12_500),
+    (5,  15_000),
+    (6,  20_000),
+    (7,  25_000),
+    (8,  30_000),
+    (9,  35_000),
+    (10, 40_000),
+    (11, 50_000),
+    (12, 60_000),
+    (13, 75_000),
+    (14, 100_000),
+    (15, 150_000),
+    (16, float("inf")),
+]
+ 
+
+def _parse_income_label(label):
+    """
+    Parse the upper-bound dollar cutoff from ACS-derived income group label
+    Returns inf for the last group (e.g. '125k+').
+ 
+    Expected formats: '<35k', '35k-75k', '75k-125k', '125k+'
+    """
+    label = label.strip()
+    if label.startswith("<"):
+        return int(label[1:].replace("k", "")) * 1_000
+    elif label.endswith("+"):
+        return float("inf")
+    elif "-" in label:
+        upper = label.split("-")[1]
+        return int(upper.replace("k", "")) * 1_000
+    else:
+        raise ValueError(f"Unrecognized income label format: {label!r}")
+ 
+ 
+def compute_atus_income_group_mapping(income_margins):
+    """
+    Derive ATUS HUFAMINC income group mapping from ACS-derived quartile labels.
+ 
+    Reads group labels from the income margins file produced by the ACS processing
+    step, parses the dollar cutoffs from those labels, and maps each cutoff to the
+    closest ATUS HUFAMINC bin boundary.
+ 
+    Parameters
+    ----------
+    income_margins : pd.DataFrame or str or Path
+        Output of format_cbsa_marginals() as loaded from its saved CSV,
+        or a path to that CSV file.
+ 
+    Returns
+    -------
+    labels : list of str
+        Income group labels inherited from the ACS margins file.
+    mapping : dict
+        {group_idx: lambda} object compatible with
+        build_grouped_meta's group_specs mapping format.
+    """
+
+    if isinstance(income_margins, (str, Path)):
+        income_margins = pd.read_csv(income_margins)
+    
+
+    label_col = [c for c in income_margins.columns if c != "pop"][0]
+    labels = income_margins[label_col].tolist()
+ 
+    # parse upper bound cutoffs; exclude inf (last group has no split point)
+    cutoffs = [_parse_income_label(l) for l in labels]
+    split_cutoffs = [c for c in cutoffs if c != float("inf")]
+ 
+    # find closest ATUS bin code for each ACS cutoff
+    atus_upper_bounds = [ub for _, ub in _HUFAMINC_BINS]
+    split_codes = []
+    for cutoff in split_cutoffs:
+        diffs = [abs(ub - cutoff) for ub in atus_upper_bounds]
+        idx = int(np.argmin(diffs))
+        split_codes.append(_HUFAMINC_BINS[idx][0])
+ 
+    # build lambda mapping: boundaries define inclusive upper code per group
+    boundaries = [0] + split_codes + [_HUFAMINC_BINS[-1][0]]
+    mapping = {}
+    for i in range(len(labels)):
+        lo = boundaries[i]
+        hi = boundaries[i + 1]
+        if i == 0:
+            mapping[i] = lambda x, hi=hi: x <= hi
+        elif i == len(labels) - 1:
+            mapping[i] = lambda x, lo=lo: x > lo
+        else:
+            mapping[i] = lambda x, lo=lo, hi=hi: lo < x <= hi
+ 
+    return labels, mapping
+ 
+ 
+def compute_atus_age_group_mapping(age_margins):
+    """
+    Derive ATUS age group mapping from ACS-derived age group labels.
+ 
+    Reads group labels from the age margins file produced by the ACS processing
+    step and constructs integer age range conditions for each group.
+ 
+    Parameters
+    ----------
+    age_margins : pd.DataFrame or str or Path
+        Output of format_cbsa_marginals() as loaded from its saved CSV,
+        or a path to that CSV file.
+ 
+    Returns
+    -------
+    labels : list of str
+        Age group labels inherited from the ACS margins file.
+    mapping : dict
+        Integer-keyed dict {group_idx: lambda} compatible with
+        build_grouped_meta's STRATIFICATION_SPEC mapping format.
+    """
+
+    if isinstance(age_margins, (str, Path)):
+        age_margins = pd.read_csv(age_margins)
+    
+    label_col = [c for c in age_margins.columns if c != "pop"][0]
+    labels = age_margins[label_col].tolist()
+ 
+    # derive split points from lower bounds of each non-first label
+    # e.g. '18-24' -> 18, '67+' -> 67
+    split_ages = []
+    for label in labels[1:]:
+        label = label.strip()
+        if label.endswith("+"):
+            split_ages.append(int(label[:-1]))
+        elif "-" in label:
+            split_ages.append(int(label.split("-")[0]))
+        elif label.startswith("<"):
+            split_ages.append(int(label[1:]))
+ 
+    boundaries = [0] + split_ages + [float("inf")]
+    mapping = {}
+    for i in range(len(labels)):
+        lo = boundaries[i]
+        hi = boundaries[i + 1]
+        if i == 0:
+            mapping[i] = lambda x, hi=hi: x < hi
+        elif i == len(labels) - 1:
+            mapping[i] = lambda x, lo=lo: x >= lo
+        else:
+            mapping[i] = lambda x, lo=lo, hi=hi: lo <= x < hi
+ 
+    return labels, mapping
 
 
 
@@ -172,6 +330,7 @@ def map_tewhere(mapping, diaries):
 
 # ==================== FUNCTIONS TO CLEAN UP METADATA IN THE END ====================
 
+
 def group_codes(value, mapping, default=None):
     for group_code, condition in mapping.items():
         if callable(condition):
@@ -188,6 +347,7 @@ def make_joint_code_from_cols(df, vars_, group_specs):
     for var in vars_[1:]:
         code = code * len(group_specs[var]["labels"]) + df[var]
     return code
+
 
 def build_grouped_meta(
     df,
