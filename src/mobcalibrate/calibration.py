@@ -1,25 +1,135 @@
+import pickle
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple, Union
+
 import numpy as np
 import pandas as pd
 
-from dataclasses import dataclass, field
-from typing import Union, Optional, List, Tuple, Dict, Literal
-
+from .core import (
+    align_cdfs_to_home_cbgs,
+    build_cdfs,
+    sample_codes_from_cdf,
+    stage1_ipf,
+    stage2_rake,
+)
 from .utils import make_joint_code
-from .core import *
 
 
+Mode = Literal['uniform', 'demographic', 'behavioral', 'demographic_behavioral']
+
+_VALID_MODES = {'uniform', 'demographic', 'behavioral', 'demographic_behavioral'}
+_MODES_NEEDING_STAGE1 = {'demographic', 'demographic_behavioral'}
+_MODES_NEEDING_STAGE2 = {'behavioral', 'demographic_behavioral'}
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    """
+    Immutable output for `Calibrator.create_weights`.
+
+    The first dimension of `weights` / `sampled_codes` indexes replicates.
+    Index 0 is the "main" estimate; indices 1..R-1 are variance replicates.
+    """
+
+    # per (replicate, unit) — int64, scaled to target_pop_tot and rounded
+    weights: np.ndarray           # (R, N, 2) — [weight1, weight_final]
+    sampled_codes: np.ndarray     # (R, N, 3) — [row, col, joint]
+
+    # per unit
+    unit_ids: np.ndarray          # (N,)
+
+    # per replicate
+    spawn_keys: Dict[int, Tuple]
+
+    # per call
+    mode: str
+    seed: Optional[int]
+    target_pop_tot: int
+    row_var: str
+    col_var: str
+    row_cats: np.ndarray
+    col_cats: np.ndarray
+
+    # --- views ---
+
+    def all_final_weights(self, to_df=True) -> np.ndarray:
+        """(N, R) view of weight_final across all replicates; column 0 is the main."""
+        w = self.weights[:, :, 1].T
+        if to_df:
+            w_columns = [f'weight_final_{r}' for r in range(self.num_replicates)]
+            w = pd.DataFrame(w, columns=w_columns)
+            w.insert(0, 'unit_id', self.unit_ids)
+        return w
+
+    def main_weights(self) -> np.ndarray:
+        return self.weights[0]
+
+    def replicate_weights(self) -> np.ndarray:
+        return self.weights[1:]
+
+    def all_weights(self) -> np.ndarray:
+        return self.weights
+
+    @property
+    def num_replicates(self) -> int:
+        return self.weights.shape[0]
+
+    # --- materialize to DataFrame with metadata ---
+
+    def to_df(self, replicate_id: int = 0) -> pd.DataFrame:
+        w = self.weights[replicate_id]
+        c = self.sampled_codes[replicate_id]
+        return pd.DataFrame({
+            'unit_id': self.unit_ids,
+            'weight1': w[:, 0],
+            'weight_final': w[:, 1],
+            f'sampled_{self.row_var}_code': c[:, 0],
+            f'sampled_{self.col_var}_code': c[:, 1],
+            'sampled_joint_stratum_code': c[:, 2],
+            'calibration_mode': self.mode
+        })
+
+    def to_long_df(self) -> pd.DataFrame:
+        R, N, _ = self.weights.shape
+        flat_w = self.weights.reshape(R * N, 2)
+        flat_c = self.sampled_codes.reshape(R * N, 3)
+        return pd.DataFrame({
+            'replicate_id': np.repeat(np.arange(R), N),
+            'unit_id': np.tile(self.unit_ids, R),
+            'weight1': flat_w[:, 0],
+            'weight_final': flat_w[:, 1],
+            f'sampled_{self.row_var}_code': flat_c[:, 0],
+            f'sampled_{self.col_var}_code': flat_c[:, 1],
+            'sampled_joint_stratum_code': flat_c[:, 2],
+            'calibration_mode': self.mode
+        })
+
+    # --- save/load results ---
+
+    def save(self, path: Union[str, Path]) -> None:
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> 'CalibrationResult':
+        with open(path, 'rb') as f:
+            obj = pickle.load(f)
+        if not isinstance(obj, cls):
+            raise TypeError(f'expected CalibrationResult, got {type(obj).__name__}')
+        return obj
 
 
 @dataclass
 class Calibrator:
-    #  unit IDs to identify mobility individuals or individual-days
+    # unit IDs to identify mobility individuals or individual-days
     unit_ids: Optional[Union[np.ndarray, list]]
 
-    # Pre-filterd mobility inputs
+    # pre-filtered mobility inputs
     home_cbgs: Union[np.ndarray, list]
     assigned_cluster_labels: Union[np.ndarray, list]
 
-    # Calibration inputs/constraints
+    # calibration inputs/constraints
     acs_cbg_probs_df: pd.DataFrame
     acs_row_var_name: str
     acs_col_var_name: str
@@ -27,236 +137,139 @@ class Calibrator:
     acs_col_cats: Union[np.ndarray, list]
     acs_row_margin: Union[np.ndarray, list]
     acs_col_margin: Union[np.ndarray, list]
-    atus_target_table: Union[pd.DataFrame, np.ndarray]
     target_pop_tot: int
+
+    # required only for modes that run stage 2 (behavioral / demographic_behavioral)
+    atus_target_table: Optional[Union[pd.DataFrame, np.ndarray]] = None
+
     geoid_col: str = 'GEOID'
-    num_replicates: int = 160
-    mode: Literal["census_only", "behavioural_full", "behavioural_only", "all_with_behavioural_only", "all"] = "behavioural_full"
+    # total number of weight sets produced; index 0 is the point estimate
+    num_replicates: int = 161
 
     # RNG
     seed: Optional[int] = None
     seedseq: List[np.random.SeedSequence] = field(init=False)
-    #spawn_keys: List[Tuple[int, ...]] = field(default_factory=list)
-    spawn_keys: Dict = field(default_factory=dict)
-    #rng: np.random.Generator = field(init=False)
 
-    # (For internal cache)
+    # internal cache
     num_row_cats: int = field(init=False)
     num_col_cats: int = field(init=False)
     num_strata: int = field(init=False)
     num_clusters: int = field(init=False)
     cdf_row_aligned: np.ndarray = field(init=False)
     cdf_col_aligned: np.ndarray = field(init=False)
-    weights_data: np.ndarray = field(init=False)
-    
 
     def __post_init__(self):
-        tot_replicates = self.num_replicates + 1
+        if self.num_replicates < 1:
+            raise ValueError('num_replicates must be >= 1 (index 0 is the point estimate)')
+
         ss = np.random.SeedSequence(self.seed)
-        self.seedseq = ss.spawn(tot_replicates)
-        #self.rng = np.random.default_rng(self.seed)
+        self.seedseq = ss.spawn(self.num_replicates)
 
         self.num_row_cats = len(self.acs_row_cats)
         self.num_col_cats = len(self.acs_col_cats)
-        self.num_strata = self.atus_target_table.shape[0]
-        self.num_clusters = self.atus_target_table.shape[1]
 
-        acs_geoids, cdf_row, cdf_col = build_cdfs(self.acs_cbg_probs_df, self.acs_row_cats, self.acs_col_cats, geoid_col=self.geoid_col)
-        cdf_row_aligned, cdf_col_aligned = align_cdfs_to_home_cbgs(self.home_cbgs, acs_geoids, cdf_row, cdf_col)
+        if self.atus_target_table is not None:
+            self.num_strata = self.atus_target_table.shape[0]
+            self.num_clusters = self.atus_target_table.shape[1]
+        else:
+            self.num_strata = 0
+            self.num_clusters = 0
+
+        acs_geoids, cdf_row, cdf_col = build_cdfs(
+            self.acs_cbg_probs_df, self.acs_row_cats, self.acs_col_cats, geoid_col=self.geoid_col
+        )
+        cdf_row_aligned, cdf_col_aligned = align_cdfs_to_home_cbgs(
+            self.home_cbgs, acs_geoids, cdf_row, cdf_col
+        )
         self.cdf_row_aligned = cdf_row_aligned
         self.cdf_col_aligned = cdf_col_aligned
 
-        num_data_cols = 6  # weight1, weight_behav, weight2, sampled_row_code, sampled_col_code, joint_strata_code
-        self.weights_data = np.empty((tot_replicates, len(self.home_cbgs), num_data_cols), dtype=np.int64)
 
+    def create_weights(self, mode: Mode = 'demographic_behavioral') -> CalibrationResult:
+        if mode not in _VALID_MODES:
+            raise ValueError(
+                f'unknown mode {mode!r}; expected one of {sorted(_VALID_MODES)}'
+            )
+        if mode in _MODES_NEEDING_STAGE2 and self.atus_target_table is None:
+            raise ValueError(
+                f'mode={mode!r} runs stage-2 raking and requires atus_target_table'
+            )
 
-    def _create_weights(self, rng, replicate=0, mode="all"):      
+        R = self.num_replicates
+        N = len(self.home_cbgs)
+        weights = np.empty((R, N, 2), dtype=np.int64)
+        sampled_codes = np.empty((R, N, 3), dtype=np.int64)
+        spawn_keys: Dict[int, Tuple] = {}
 
-        # sample demographics from ACS CBG probabilities
+        for r, s in enumerate(self.seedseq):
+            spawn_keys[r] = s.spawn_key
+            rng = np.random.default_rng(s)
+            w1, w_final, row_codes, col_codes, joint_codes = self._compute_one_replicate(rng, mode)
+            weights[r, :, 0] = np.rint(w1 * self.target_pop_tot).astype(np.int64)
+            weights[r, :, 1] = np.rint(w_final * self.target_pop_tot).astype(np.int64)
+            sampled_codes[r, :, 0] = row_codes
+            sampled_codes[r, :, 1] = col_codes
+            sampled_codes[r, :, 2] = joint_codes
+
+        unit_ids = (
+            np.asarray(self.unit_ids)
+            if self.unit_ids is not None
+            else np.arange(N)
+        )
+
+        result = CalibrationResult(
+            weights=weights,
+            sampled_codes=sampled_codes,
+            unit_ids=unit_ids,
+            spawn_keys=spawn_keys,
+            mode=mode,
+            seed=self.seed,
+            target_pop_tot=self.target_pop_tot,
+            row_var=self.acs_row_var_name,
+            col_var=self.acs_col_var_name,
+            row_cats=np.asarray(self.acs_row_cats),
+            col_cats=np.asarray(self.acs_col_cats),
+        )
+
+        print(
+            'Weights created, returning CalibrationResult object.\n'
+            'Use all_final_weights() to obtain final weights.\n'
+            'Use to_df() to obtain replicate-specific stage1 and stage2 weights with metadata.\n'
+            'Use to_long_df() to obtain all replicate weights with metadata.\n'
+        )
+        return result
+
+    def _compute_one_replicate(
+        self, rng: np.random.Generator, mode: str
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         sampled_row_codes = sample_codes_from_cdf(self.cdf_row_aligned, rng)
         sampled_col_codes = sample_codes_from_cdf(self.cdf_col_aligned, rng)
+        joint_codes = make_joint_code(sampled_row_codes, sampled_col_codes, self.num_col_cats)
+        N = len(self.home_cbgs)
 
-        # check which stages we need to compute
-        need_stage2 = mode in ["behavioural_full", "all_with_behavioural_only", "all"]
-        need_behavioural_only = (mode == "behavioural_only")
-        need_behavioural = (mode == "all_with_behavioural_only")
+        if mode in _MODES_NEEDING_STAGE1:
+            weight1, _ = stage1_ipf(
+                sampled_row_codes,
+                sampled_col_codes,
+                self.acs_row_margin,
+                self.acs_col_margin,
+                n_iter=10,
+            )
+        else:
+            weight1 = np.full(N, 1.0 / N)
 
-        # initialize vectors
-        weights_stage1 = None
-        weights_behavioural = None
-        weights_stage2 = None
-
-        # need only behavioural, no need to compute stage1
-        if need_behavioural_only:
-            weights_stage1 = np.full(len(self.assigned_cluster_labels), 1.0 / len(self.assigned_cluster_labels))
-            
-            # calibrate stage 2 weights
-            weights_behavioural, diagnostics_stage2 = stage2_rake(
+        if mode in _MODES_NEEDING_STAGE2:
+            weight_final, _ = stage2_rake(
                 sampled_row_codes,
                 sampled_col_codes,
                 self.num_row_cats,
                 self.num_col_cats,
                 self.assigned_cluster_labels,
-                weights_stage1,
+                weight1,
                 self.atus_target_table,
-                factor_clip=None
+                factor_clip=None,
             )
-            
-        # need to compute stage1
         else:
-            # calibrate stage 1 weights
-            weights_stage1, diagnostics_stage1 = stage1_ipf(sampled_row_codes, sampled_col_codes, self.acs_row_margin,
-                                                            self.acs_col_margin, n_iter=10)
-            
-            # also need stage2
-            if need_stage2:
-                # calibrate stage 2 weights
-                weights_stage2, diagnostics_stage2 = stage2_rake(
-                    sampled_row_codes,
-                    sampled_col_codes,
-                    self.num_row_cats,
-                    self.num_col_cats,
-                    self.assigned_cluster_labels,
-                    weights_stage1,
-                    self.atus_target_table,
-                    factor_clip=None
-                )
-            
-            # need behavioural along with stage1
-            if need_behavioural:
+            weight_final = weight1
 
-                weights_tmp = np.full(len(self.assigned_cluster_labels), 1.0 / len(self.assigned_cluster_labels))
-            
-                # calibrate stage 2 weights
-                weights_behavioural, diagnostics_stage2 = stage2_rake(
-                    sampled_row_codes,
-                    sampled_col_codes,
-                    self.num_row_cats,
-                    self.num_col_cats,
-                    self.assigned_cluster_labels,
-                    weights_tmp,
-                    self.atus_target_table,
-                    factor_clip=None
-                )
-
-        # save weights and associated data from this replicate if they exist
-        # otherwise the dataframe defaults to empty
-        if weights_stage1 is not None:
-            self.weights_data[replicate, :, 0] = np.rint(weights_stage1 * self.target_pop_tot).astype(int)
-        if weights_behavioural  is not None:
-            self.weights_data[replicate, :, 1] = np.rint(weights_behavioural * self.target_pop_tot).astype(int)
-        if weights_stage2 is not None:
-            self.weights_data[replicate, :, 2] = np.rint(weights_stage2 * self.target_pop_tot).astype(int)
-        self.weights_data[replicate, :, 3] = sampled_row_codes
-        self.weights_data[replicate, :, 4] = sampled_col_codes
-        self.weights_data[replicate, :, 5] = make_joint_code(sampled_row_codes, sampled_col_codes, self.num_col_cats)
-        
-
-    def create_main_weights(self, mode="all"):
-        s = self.seedseq[0]
-        self.spawn_keys[0] = s.spawn_key
-        rng = np.random.default_rng(s)
-        self._create_weights(rng, replicate=0, mode=mode)
-    
-    def create_replicate_weights(self, mode="all"):
-        if len(self.seedseq) == 1:
-            print("num_replicates was set to 0 during initialization, returning without creating replicate weights")
-
-        for r, s in enumerate(self.seedseq[1:]):
-            self.spawn_keys[r+1] = s.spawn_key
-            rng = np.random.default_rng(s)
-            self._create_weights(rng, replicate=r+1, mode=mode)
-
-
-    def weights_data_to_df(self, data, mode="behavioural_full"):
-        col_names = np.array([
-                'weight_census', 
-                'weight_behavioural_only',
-                'weight_behavioural_full', 
-                'sampled_'+self.acs_row_var_name+'_code',
-                'sampled_'+self.acs_col_var_name+'_code',
-                'sampled_joint_stratum_code'
-                ])
-
-        # return asked weights only
-        # index depends on needed weights
-        #### TODO ####
-        # the following should be modified so that weight1 and weight2
-        # are always returned no matter but, while the underlying calculations change
-        # also the naming is very confusing currently
-        ##############
-        if mode == "census_only":
-            idx = [0,3,4,5]
-        elif mode == "behavioural_full":
-            idx = [2,3,4,5]
-        elif mode == "behavioural_only":
-            idx = [1,3,4,5]
-        elif mode == "all":
-            idx = [0,2,3,4,5]
-        elif mode == "all_with_behavioural_only":
-            idx = list(range(len(col_names)))
-        else:
-            raise ValueError(f"Unknown mode: {mode!r}")
- 
-        df = pd.DataFrame(data[:, idx], columns=col_names[idx]).astype(int)
-        df.insert(0, 'unit_id', self.unit_ids)
-        df.insert(len(df.columns), 'assigned_cluster_label', self.assigned_cluster_labels)
- 
-        return df
-
-    def get_main_weights(self, return_df=True, mode="behavioural_full"):
-        data = self.weights_data[0, :, :]
-
-        if return_df:
-            return self.weights_data_to_df(data, mode=mode)
-        else:
-            return data
-    
-
-    def _get_weights_by_replicate_id(self, replicate_id, return_df=False, mode="behavioural_full"):
-        """
-        return the weights from the specified replicate along with sampled demographic codes.
-        if return_df = True, return the weights as a dataframe
-        
-        replicate_id = 0 for main weights
-        replicate_id range from 1 to num_replicates for replicate weights
-        """
-
-        data = self.weights_data[replicate_id, :, :]
-
-        if replicate_id > self.num_replicates:
-            print("replicate id exceeds the number of replicates specified during init; returning nothing")
-            return
-        
-        if return_df:
-            return self.weights_data_to_df(data, mode=mode)
-        else:
-            return data
-        
-
-    def get_replicate_weights(self, return_df=False, mode="behavioural_full"):
-        """
-        if return_df = False, return a numpy array with shape 
-        (num_replicates, N, weights_data_cols) 
-        where the first dimension is the replicates
-
-        if return_df = True, return list of dataframes, 
-        where the first dataframe is the weights data from replicate 1
-        """
-        if return_df:
-            return [self._get_weights_by_replicate_id(r, return_df=True, mode=mode) for r in range(1, self.num_replicates+1)]
-        else:
-            return self.weights_data[1:, :, :]
-    
-
-    def get_all_weights(self, return_df=False):
-        if return_df:
-            return [self._get_weights_by_replicate_id(r, return_df=True) for r in range(self.num_replicates+1)]
-        else:
-            return self.weights_data
-    
-
-    def get_seed_info(self):
-        # return the initial seed number to generate a root seedsequence
-        # as well as a dict of spawn key for each replicate
-        return self.seed, self.spawn_keys
+        return weight1, weight_final, sampled_row_codes, sampled_col_codes, joint_codes
