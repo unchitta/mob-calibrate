@@ -338,3 +338,106 @@ def format_cbsa_marginals(series, var_name, value_name = 'pop'):
     m.name = value_name
     m.index.name = var_name
     return m.reset_index()
+
+
+# Default age grouping, matching walkthrough_02_process_acs.ipynb.
+# Users can override by passing their own age_groups dict to process_cbsa.
+DEFAULT_AGE_GROUPS = {
+    '<18': [
+        'Under 5 years',
+        '5 to 9 years',
+        '10 to 14 years',
+        '15 to 17 years',
+    ],
+    '18-24': [
+        '18 and 19 years',
+        '20 years',
+        '21 years',
+        '22 to 24 years',
+    ],
+    '25-44': [
+        '25 to 29 years',
+        '30 to 34 years',
+        '35 to 39 years',
+        '40 to 44 years',
+    ],
+    '45-66': [
+        '45 to 49 years',
+        '50 to 54 years',
+        '55 to 59 years',
+        '60 and 61 years',
+        '62 to 64 years',
+        '65 and 66 years',
+    ],
+    '67+': [
+        '67 to 69 years',
+        '70 to 74 years',
+        '75 to 79 years',
+        '80 to 84 years',
+        '85 years and over',
+    ],
+}
+
+
+def process_cbsa(
+    income_file,
+    age_file,
+    income_group_mapping=None,
+    age_groups=None,
+    drop_age_groups=None,
+    row_var='income',
+    col_var='age',
+):
+    """
+    One-call ACS pipeline: produces CBG-level joint distribution and CBSA-level margins.
+
+    Thin facade over compute_income_quartile_mapping + process_income_table
+    + process_age_table + format_cbsa_marginals + merge_distr_tables.
+
+    Parameters
+    ----------
+    income_file, age_file : str or Path
+        Raw ACS B19001 (income) and B01001 (age) CSVs downloaded from data.census.gov.
+    income_group_mapping : dict or None, default None
+        {label: [ACS columns]}. If None, auto-derive as quartiles from the CBSA-level
+        row via compute_income_quartile_mapping; the derived labels are printed.
+    age_groups : dict or None, default None
+        {label: [raw ACS age category strings]}. If None, uses DEFAULT_AGE_GROUPS
+        (the grouping used by walkthrough_02_process_acs.ipynb).
+    drop_age_groups : list or None
+        Age group labels to drop from the output (e.g. ['<18']).
+    row_var, col_var : str
+        Column names used when formatting the CBSA margin DataFrames
+        (must match the ROW_VAR / COL_VAR used downstream).
+
+    Returns
+    -------
+    acs_cbg_distr : pd.DataFrame
+        CBG × (income-group + age-group) joint distribution (row-normalized within each CBG).
+    income_margin : pd.DataFrame
+        CBSA-level income margin; columns [row_var, 'pop'].
+    age_margin : pd.DataFrame
+        CBSA-level age margin; columns [col_var, 'pop'].
+    """
+    if income_group_mapping is None:
+        income_group_mapping = compute_income_quartile_mapping(income_file)
+        print(f'acs.process_cbsa: auto-derived income quartile mapping: '
+              f'{list(income_group_mapping.keys())}')
+
+    if age_groups is None:
+        age_groups = DEFAULT_AGE_GROUPS
+        print(f'acs.process_cbsa: using DEFAULT_AGE_GROUPS: {list(age_groups.keys())}')
+
+    income_cbg, income_cbsa = process_income_table(
+        income_file, group_mapping=income_group_mapping, last_row_margins=True
+    )
+    age_cbg, age_cbsa = process_age_table(
+        age_file, group_mapping=age_groups, drop_groups=drop_age_groups, last_row_margins=True
+    )
+
+    income_margin = format_cbsa_marginals(income_cbsa, var_name=row_var)
+    age_margin = format_cbsa_marginals(age_cbsa, var_name=col_var)
+
+    acs_cbg_distr = merge_distr_tables([age_cbg, income_cbg])
+
+    return acs_cbg_distr, income_margin, age_margin

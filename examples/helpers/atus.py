@@ -437,11 +437,28 @@ def stage_sequence(staged_diaries, seq_col=None, fill_func=None):
     return seq
 
 
-def sequence(staged, T, nan_policy='omit'):
+def sequence(staged, T, nan_policy='omit', state_order=None):
+    """
+    Downsample a 1-minute staged sequence to T-minute cells via modal state.
+
+    state_order : sequence of states, optional
+        For string-valued input, explicit priority used to build the
+        string→int mapping before scipy.stats.mode. The first entry becomes
+        int 0 and wins ties over later entries. Observed states not in
+        state_order are appended in sorted order after it.
+        Defaults to alphabetical.
+
+    Note (2026-04-23): prior to adding `state_order`, string-valued input
+    was always mapped via sorted(unique(states)), meaning mode()'s tie-break
+    priority followed the alphabetical order of label names. For the 3-cat
+    alphabet ['Home', 'Work', 'Other'] that put Work *after* Other in int
+    space, so Other won ties over Work — giving different downsampled
+    sequences from the int-coded walkthrough_03 pipeline on the same data.
+    """
 
     if T == 1:
         return
-    
+
     # convert staged diaries to np array
     staged_arr = staged.to_numpy()
 
@@ -452,7 +469,12 @@ def sequence(staged, T, nan_policy='omit'):
     if str_states:
 
         # get unique states in array
-        uniq = sorted(np.unique(staged_arr))
+        if state_order is not None:
+            explicit = list(state_order)
+            extras = sorted(set(np.unique(staged_arr)) - set(explicit))
+            uniq = explicit + extras
+        else:
+            uniq = sorted(np.unique(staged_arr))
         uniq_lookup1 = {}
         uniq_lookup2 = {}
 
@@ -478,5 +500,233 @@ def sequence(staged, T, nan_policy='omit'):
     
     if str_states:
         seq = map2(seq)
-    
+
     return pd.DataFrame(seq, index=staged.index)
+
+
+
+# ==================== WRAPPERS FOR QUICKSTART NOTEBOOK ====================
+
+def load(resp_file, cps_file, act_file, tewhere_map,
+         years, age_min=18, cbsa_filter=None):
+    """
+    Streamlines loading and cleaning ATUS respondent and activity data
+    then applies the TEWHERE mapping.
+
+    This function calls get_resp + get_diaries + map_tewhere
+
+    Parameters
+    ----------
+    resp_file, cps_file, act_file : path-like
+        ATUS respondent, CPS, and activity data files.
+    tewhere_map : dict (or defaultdict)
+        Maps TEWHERE codes to activity alphabet (ints or labels).
+        Pass a defaultdict to include fallback for unmapped codes.
+    years : list[int]
+    age_min : int
+    cbsa_filter : list[int] or None
+
+    Returns
+    -------
+    resp : pd.DataFrame
+    diaries : pd.DataFrame
+        Includes a 'WHERE' column with mapped activity states.
+    """
+    resp = get_resp(resp_file, cps_file, years, cbsa_filter=cbsa_filter, age_min=age_min)
+    diaries = get_diaries(act_file, resp)
+    diaries = map_tewhere(tewhere_map, diaries)
+    return resp, diaries
+
+
+def stratify(resp, income_margin, age_margin, row_var='income', col_var='age'):
+    """
+    Stratify ATUS respondents onto the income and age groups as defined by ACS margins.
+
+    Auto-derives ATUS→ACS income and age group mappings if no override is passed;
+    the derived labels are printed.
+
+    Parameters
+    ----------
+    resp : pd.DataFrame
+        Cleaned respondent DataFrame from `atus.load`.
+    income_margin, age_margin : pd.DataFrame
+        CBSA-level margin DataFrames produced by `acs.process_cbsa`.
+    row_var, col_var : str
+        Names to use for the stratified columns in the output (default 'income', 'age').
+
+    Returns
+    -------
+    atus_meta : pd.DataFrame
+        Stratified respondent metadata with `row_var`, `col_var`, joint code, plus base_cols.
+    group_maps : dict
+        {row_var: {'labels': [...]}, col_var: {'labels': [...]}}
+    """
+
+    base_cols = ['TUCASEID', 'TUFINLWGT', 'GTCBSA']
+
+    income_labels, income_mapping = compute_atus_income_group_mapping(income_margin)
+    print(f'auto-derived ATUS income groups: {income_labels}')
+
+    age_labels, age_mapping = compute_atus_age_group_mapping(age_margin)
+    print(f'auto-derived ATUS age groups: {age_labels}')
+
+    group_specs = {
+        row_var: {
+            'source_col': 'INCOME_GROUP',
+            'mapping': income_mapping,
+            'labels': income_labels,
+        },
+        col_var: {
+            'source_col': 'AGE',
+            'mapping': age_mapping,
+            'labels': age_labels,
+        },
+    }
+
+    atus_meta = build_grouped_meta(
+        df=resp,
+        base_cols=base_cols,
+        group_specs=group_specs,
+        joint_vars=[row_var, col_var],
+    )
+
+    group_maps = {
+        row_var: {'labels': income_labels},
+        col_var: {'labels': age_labels},
+    }
+    return atus_meta, group_maps
+
+
+def select_feature_subset(metrics_df, feature_subset, all_labels):
+    """
+    Select a subset of feature columns from a compute_metrics_for_all_sequences output.
+
+    feature_subset : one of
+        'all'          → return every column unchanged
+        'metrics_only' → just num_activities, turnover_rate, reciprocity
+        'tu_only'      → just the time-use duration columns (one per label in all_labels)
+        'edges_only'   → just the edge-transition columns (names starting with 'edge_')
+    """
+    if feature_subset == 'all':
+        return metrics_df
+    if feature_subset == 'metrics_only':
+        cols = ['num_activities', 'turnover_rate', 'reciprocity']
+        return metrics_df[[c for c in cols if c in metrics_df.columns]]
+    if feature_subset == 'tu_only':
+        cols = [c for c in all_labels if c in metrics_df.columns]
+        return metrics_df[cols]
+    if feature_subset == 'edges_only':
+        cols = [c for c in metrics_df.columns if str(c).startswith('edge_')]
+        return metrics_df[cols]
+    raise ValueError(
+        f'Unknown feature_subset {feature_subset!r}; '
+        "expected one of 'all', 'metrics_only', 'tu_only', 'edges_only'"
+    )
+
+
+def build_sequences(diaries, T=30, state_order=None):
+    """
+    Produce a DataFrame of activity sequences from cleaned diaries.
+
+    Calls stage_diaries() + stage_sequence(seq_col='WHERE') + sequence().
+    Assumes diaries has a 'WHERE' column (produced by `atus.map_tewhere` or `atus.load`).
+
+    state_order : sequence of states, optional
+        Forwarded to `sequence`; controls tie-break priority when mode()
+        downsamples string-valued sequences. Pass your
+        SEQUENCE_METRIC_SPECS['all_labels'] to make tie-breaking follow the
+        alphabet's intended priority (first label wins ties over later ones).
+
+    Note (2026-04-23): added state_order. Without it, string-valued sequences
+    used alphabetical priority inside `sequence`, which can cause discrepancies
+    when string states are used vs integer states.
+
+    Returns
+    -------
+    atus_seq : pd.DataFrame
+        Shape (N_respondents, 24*60/T). Each row is one respondent-day's activity sequence.
+    """
+
+    staged_diaries = stage_diaries(diaries)
+    staged_sequence = stage_sequence(staged_diaries, seq_col='WHERE')
+    atus_seq = sequence(staged_sequence, T=T, state_order=state_order)
+    return atus_seq
+
+
+def cluster_sequences(atus_seq, weights, K, sequence_metric_specs,
+                      seed=None, n_restarts=10):
+    """
+    Clusters sequences using weighted k-medoids, streamlining calculation of sequence metrics
+    Returns atus metrics, cluster results, and medoid thresholds.
+
+    The feature_subset in sequence_metric_specs is applied to the metrics DataFrame
+    before distance computation; the full (unsubsetted) metrics are returned so
+    that `mobility.distance_to_atus` can re-apply the same subset.
+
+    This function calls
+        - compute_metrics_for_all_sequences()
+        - metrics_cosine_D()
+        - fit_weighted_kmedoids_with_restarts()
+        - compute_dist_to_medoid_thresholds()
+
+    Parameters
+    ----------
+    atus_seq : pd.DataFrame
+        Output of `atus.build_sequences`.
+    weights : array-like, shape (N,)
+        Survey weights per respondent (e.g. from atus_meta['TUFINLWGT']).
+    K : int
+        Number of clusters.
+    sequence_metric_specs : dict with keys
+        'home_label', 'work_label', 'all_labels', 'feature_subset'.
+    seed : int or None
+        Random seed for the k-medoids restarts.
+    n_restarts : int
+
+    Returns
+    -------
+    atus_metrics : pd.DataFrame
+        Full feature table indexed like atus_seq (not subsetted).
+    cluster_results : dict
+        {'medoids', 'labels', 'inertia', 'seed'} from
+        fit_weighted_kmedoids_with_restarts.
+    medoid_thresholds : dict
+        {cluster_label: distance_threshold} at the 99th percentile.
+    """
+
+    from mobcalibrate.preprocessing import (
+        compute_metrics_for_all_sequences,
+        metrics_cosine_D,
+        fit_weighted_kmedoids_with_restarts,
+        compute_dist_to_medoid_thresholds,
+    )
+
+    home_label = sequence_metric_specs['home_label']
+    work_label = sequence_metric_specs['work_label']
+    all_labels = sequence_metric_specs['all_labels']
+    feature_subset = sequence_metric_specs.get('feature_subset', 'all')
+
+    # full feature table — returned to caller and used downstream by mobility.distance_to_atus
+    atus_metrics = compute_metrics_for_all_sequences(
+        atus_seq.values,
+        home_label=home_label,
+        work_label=work_label,
+        all_labels=all_labels,
+    )
+    atus_metrics.index = atus_seq.index
+
+    # subset applied to clustering distance matrix
+    metrics_for_dist = select_feature_subset(atus_metrics, feature_subset, all_labels)
+
+    D = metrics_cosine_D(metrics_for_dist, metrics_for_dist)
+
+    cluster_results = fit_weighted_kmedoids_with_restarts(
+        D, wA=np.asarray(weights), K=K,
+        n_restarts=n_restarts, #random_state=seed,
+    )
+
+    medoid_thresholds = compute_dist_to_medoid_thresholds(
+        D, cluster_results['medoids'], cluster_results['labels'],
+    )
+
+    return atus_metrics, cluster_results, medoid_thresholds
