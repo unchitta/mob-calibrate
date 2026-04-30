@@ -71,7 +71,7 @@ when you intend to run the notebooks:
 pip install scipy scikit-learn matplotlib fastparquet
 ```
 
----
+
 
 ## Inputs you'll need (assuming U.S.-based panels)
 
@@ -225,7 +225,8 @@ For inspecting and learning more about the individual stages:
 
 See [examples/README.md](examples/README.md) for an index.
 
----
+
+
 
 ## API reference
 
@@ -307,7 +308,7 @@ mobcalibrate/
 └── pyproject.toml
 ```
 
----
+
 
 ## License
 
