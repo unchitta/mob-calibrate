@@ -1,3 +1,3 @@
-from .calibration import Calibrator
+from .calibration import CalibrationResult, Calibrator
 
-__all__ = ["Calibrator"]
+__all__ = ["Calibrator", "CalibrationResult"]
