@@ -107,9 +107,9 @@ def compute_income_quartile_mapping(table):
     return groups
 
 
-def process_income_table(path, group_mapping=None, last_row_margins=True):
+def process_income_table(path, group_mapping=None, cbsa_code=None):
     """
-    Process ACS B19001 (household income) into a wide table of 
+    Process ACS B19001 (household income) into a wide table of
     normalized income-group distributions by GEOID.
 
     Parameters
@@ -120,15 +120,18 @@ def process_income_table(path, group_mapping=None, last_row_margins=True):
         Mapping of income-group labels to ACS columns to aggregate.
         If None, quartile boundaries are derived automatically from the
         CBSA-level row via compute_income_quartile_mapping().
-    last_row_margins : bool, default True
-        If True, treat the last row as marginal totals and return them separately.
+    cbsa_code : str or int, optional
+        CBSA code (e.g. 38060) identifying the metro-aggregate row to
+        extract as marginal totals. The row is located by exact GEOID
+        match. If None, no marginals are returned.
 
     Returns
     -------
     table : pd.DataFrame
         Wide table with GEOID and normalized income-group columns.
     marginals : pd.Series or None
-        Grouped marginal values if last_row_margins=True, else None.
+        Grouped marginal values for the CBSA row if cbsa_code is given,
+        else None.
     """
 
     id_col = "GEOID"
@@ -148,14 +151,21 @@ def process_income_table(path, group_mapping=None, last_row_margins=True):
     cols_to_keep = [id_col] + estimate_cols
     table = table[cols_to_keep]
 
-    # remap income into coarse categories by combining columns based on group_mapping 
+    # remap income into coarse categories by combining columns based on group_mapping
     for group_label, cols in group_mapping.items():
         table[group_label] = table[cols].sum(axis=1)
 
-    # drop CBSA row if last_row_margins and return that as a separate Series
-    if last_row_margins:
-        marginal_values = table.iloc[-1][group_labels].astype(float)
-        table = table.iloc[:-1].copy()
+    # extract CBSA-aggregate row (located by GEOID) as marginals, then drop it
+    if cbsa_code is not None:
+        cbsa_geoid = str(cbsa_code)
+        cbsa_mask = table[id_col] == cbsa_geoid
+        if cbsa_mask.sum() != 1:
+            raise ValueError(
+                f"Expected exactly one row with GEOID '{cbsa_geoid}', "
+                f"found {int(cbsa_mask.sum())}."
+            )
+        marginal_values = table.loc[cbsa_mask, group_labels].iloc[0].astype(float)
+        table = table.loc[~cbsa_mask].copy()
     else:
         marginal_values = None
 
@@ -171,9 +181,9 @@ def process_income_table(path, group_mapping=None, last_row_margins=True):
     return table, marginal_values
 
 
-def process_age_table(path, group_mapping, drop_groups=None, last_row_margins=True):
+def process_age_table(path, group_mapping, drop_groups=None, cbsa_code=None):
     """
-    Process ACS B01001 (sex by age) into a wide table of 
+    Process ACS B01001 (sex by age) into a wide table of
     normalized age-group distributions by GEOID.
 
     Parameters
@@ -184,15 +194,18 @@ def process_age_table(path, group_mapping, drop_groups=None, last_row_margins=Tr
         Mapping of age-group labels to lists of detailed ACS age categories.
     drop_groups : list, optional
         Age groups to exclude from the output.
-    last_row_margins : bool, default True
-        If True, treat the last row as marginal totals and return them separately.
+    cbsa_code : str or int, optional
+        CBSA code (e.g. 38060) identifying the metro-aggregate row to
+        extract as marginal totals. The row is located by exact GEOID
+        match. If None, no marginals are returned.
 
     Returns
     -------
     table : pd.DataFrame
         Wide table with GEOID and normalized age-group columns.
     marginals : pd.Series or None
-        Grouped marginal values if last_row_margins=True, else None.
+        Grouped marginal values for the CBSA row if cbsa_code is given,
+        else None.
     """
 
     id_col = "GEOID"
@@ -212,14 +225,21 @@ def process_age_table(path, group_mapping, drop_groups=None, last_row_margins=Tr
     ]
     cols_to_keep = [id_col] + estimate_cols
     table = table[cols_to_keep]
-    
-    # extract age groups from sex by age variables
+
+    # extract age groups from sex by age variables (table now has GEOID as index)
     table = age_from_sex_by_age_table(table, group_mapping, drop_groups)
-    
-    # extract marginal values if last_row_margins
-    if last_row_margins:
-        marginal_values = table.iloc[-1][group_labels_keep].astype(float)
-        table = table.iloc[:-1].copy()
+
+    # extract CBSA-aggregate row (located by GEOID) as marginals, then drop it.
+    # iloc[-1] would be unsafe here: age_from_sex_by_age_table pivots on GEOID,
+    # which sorts alphabetically; for multi-state CBSAs (e.g. 35620 spans
+    # NY/NJ/PA), the CBSA's own GEOID can sort between block-group GEOIDs
+    # rather than at the end.
+    if cbsa_code is not None:
+        cbsa_geoid = str(cbsa_code)
+        if cbsa_geoid not in table.index:
+            raise ValueError(f"CBSA row with GEOID '{cbsa_geoid}' not found in table.")
+        marginal_values = table.loc[cbsa_geoid, group_labels_keep].astype(float)
+        table = table.drop(index=cbsa_geoid).copy()
     else:
         marginal_values = None
     
@@ -382,6 +402,7 @@ DEFAULT_AGE_GROUPS = {
 def process_cbsa(
     income_file,
     age_file,
+    cbsa_code,
     income_group_mapping=None,
     age_groups=None,
     drop_age_groups=None,
@@ -398,6 +419,9 @@ def process_cbsa(
     ----------
     income_file, age_file : str or Path
         Raw ACS B19001 (income) and B01001 (age) CSVs downloaded from data.census.gov.
+    cbsa_code : str or int
+        CBSA code (e.g. 38060) used to locate the metro-aggregate row in
+        each input table, which is extracted as the marginal totals.
     income_group_mapping : dict or None, default None
         {label: [ACS columns]}. If None, auto-derive as quartiles from the CBSA-level
         row via compute_income_quartile_mapping; the derived labels are printed.
@@ -429,10 +453,10 @@ def process_cbsa(
         print(f'acs.process_cbsa: using DEFAULT_AGE_GROUPS: {list(age_groups.keys())}')
 
     income_cbg, income_cbsa = process_income_table(
-        income_file, group_mapping=income_group_mapping, last_row_margins=True
+        income_file, group_mapping=income_group_mapping, cbsa_code=cbsa_code
     )
     age_cbg, age_cbsa = process_age_table(
-        age_file, group_mapping=age_groups, drop_groups=drop_age_groups, last_row_margins=True
+        age_file, group_mapping=age_groups, drop_groups=drop_age_groups, cbsa_code=cbsa_code
     )
 
     income_margin = format_cbsa_marginals(income_cbsa, var_name=row_var)
