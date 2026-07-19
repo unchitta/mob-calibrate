@@ -11,6 +11,7 @@ from .core import (
     build_cdfs,
     sample_codes_from_cdf,
     stage1_ipf,
+    stage1_rake,
     stage2_rake,
 )
 from .utils import make_joint_code
@@ -135,9 +136,11 @@ class Calibrator:
     acs_col_var_name: str
     acs_row_cats: Union[np.ndarray, list]
     acs_col_cats: Union[np.ndarray, list]
-    acs_row_margin: Union[np.ndarray, list]
-    acs_col_margin: Union[np.ndarray, list]
     target_pop_tot: int
+    # stage 1 target: supply EITHER the joint OR both independent marginals.
+    acs_joint_margin: Optional[Union[np.ndarray, list]] = None
+    acs_row_margin: Optional[Union[np.ndarray, list]] = None
+    acs_col_margin: Optional[Union[np.ndarray, list]] = None
 
     # required only for modes that run stage 2 (behavioral / demographic_behavioral)
     atus_target_table: Optional[Union[pd.DataFrame, np.ndarray]] = None
@@ -168,6 +171,29 @@ class Calibrator:
         self.num_row_cats = len(self.acs_row_cats)
         self.num_col_cats = len(self.acs_col_cats)
 
+        # stage-1 target: normalize joint to a flat (K_row*K_col,) array
+        if self.acs_joint_margin is not None:
+            jm = np.asarray(self.acs_joint_margin, dtype=np.float64)
+            expected = self.num_row_cats * self.num_col_cats
+            if jm.ndim == 2:
+                if jm.shape != (self.num_row_cats, self.num_col_cats):
+                    raise ValueError(
+                        f'acs_joint_margin 2D shape {jm.shape} must be '
+                        f'({self.num_row_cats}, {self.num_col_cats})'
+                    )
+                jm = jm.ravel()
+            elif jm.ndim == 1:
+                if jm.size != expected:
+                    raise ValueError(
+                        f'acs_joint_margin 1D length {jm.size} must be '
+                        f'{expected} (= num_row_cats * num_col_cats)'
+                    )
+            else:
+                raise ValueError(
+                    f'acs_joint_margin must be 1D or 2D, got {jm.ndim}D'
+                )
+            self.acs_joint_margin = jm
+
         if self.atus_target_table is not None:
             self.num_strata = self.atus_target_table.shape[0]
             self.num_clusters = self.atus_target_table.shape[1]
@@ -194,6 +220,15 @@ class Calibrator:
             raise ValueError(
                 f'mode={mode!r} runs stage-2 raking and requires atus_target_table'
             )
+        if mode in _MODES_NEEDING_STAGE1:
+            has_joint = self.acs_joint_margin is not None
+            has_indep = self.acs_row_margin is not None and self.acs_col_margin is not None
+            if has_joint == has_indep:
+                raise ValueError(
+                    f'mode={mode!r} runs stage-1; supply EITHER acs_joint_margin '
+                    f'(for joint raking) OR both acs_row_margin and acs_col_margin '
+                    f'(for IPF), but not both/neither'
+                )
 
         R = self.num_replicates
         N = len(self.home_cbgs)
@@ -248,13 +283,21 @@ class Calibrator:
         N = len(self.home_cbgs)
 
         if mode in _MODES_NEEDING_STAGE1:
-            weight1, _ = stage1_ipf(
-                sampled_row_codes,
-                sampled_col_codes,
-                self.acs_row_margin,
-                self.acs_col_margin,
-                n_iter=10,
-            )
+            if self.acs_joint_margin is not None:
+                weight1, _ = stage1_rake(
+                    sampled_row_codes,
+                    sampled_col_codes,
+                    self.num_col_cats,
+                    self.acs_joint_margin,
+                )
+            else:
+                weight1, _ = stage1_ipf(
+                    sampled_row_codes,
+                    sampled_col_codes,
+                    self.acs_row_margin,
+                    self.acs_col_margin,
+                    n_iter=10,
+                )
         else:
             weight1 = np.full(N, 1.0 / N)
 
