@@ -130,6 +130,86 @@ def stage1_ipf(sampled_row_codes, sampled_col_codes, row_margin, col_margin, n_i
     return weights, diag
 
 
+def stage1_rake(sampled_row_codes, sampled_col_codes, num_col_cats, joint_margin):
+    """
+    Single-margin raking on the joint (row, col) distribution.
+
+    Use when a CBSA-level joint target is available (e.g. ACS B19037, household
+    income x age of householder). Strictly stronger than two-margin IPF: matches
+    the joint exactly (up to sampling support) and thus both marginals as well.
+    A single pass suffices because there is only one constraint.
+
+    sampled_row_codes: (N,) int codes 0..K_row-1
+    sampled_col_codes: (N,) int codes 0..K_col-1
+    num_col_cats: K_col, used to flatten (row, col) -> joint code in row-major
+    joint_margin: target joint distribution, 1D (K_row*K_col,) or 2D (K_row, K_col),
+                  summing to 1. Row-major flattening matches make_joint_code.
+
+    Initial weights are set to 1/N. Returns weights on the same scale as 1/N.
+    """
+
+    row = np.asarray(sampled_row_codes, dtype=np.int32)
+    col = np.asarray(sampled_col_codes, dtype=np.int32)
+    joint_margin = np.asarray(joint_margin, dtype=np.float64).ravel()
+
+    K = joint_margin.size
+    K_col = int(num_col_cats)
+    if K % K_col != 0:
+        raise ValueError(
+            f"joint_margin size {K} not divisible by num_col_cats {K_col}"
+        )
+
+    N = row.size
+    if N == 0 or col.size != N:
+        raise ValueError("row/col code arrays must be same length and N>0")
+    if row.min() < 0 or col.min() < 0 or col.max() >= K_col:
+        raise ValueError("sampled codes out of bounds")
+
+    joint = make_joint_code(row, col, K_col)
+    if joint.max() >= K:
+        raise ValueError("joint codes exceed joint_margin support")
+
+    weights = np.full(N, 1.0 / N, dtype=np.float64)
+    tot = np.bincount(joint, weights=weights, minlength=K)
+    adj = np.divide(joint_margin, tot, out=np.ones(K), where=tot > 0)
+    np.multiply(weights, adj[joint], out=weights)
+
+    # diagnostics (convergence within abs+rel tolerance)
+    final_tot = np.bincount(joint, weights=weights, minlength=K)
+    joint_abs = float(np.max(np.abs(final_tot - joint_margin)))
+
+    atol = 1e-4
+    rtol = 1e-2
+    converged = np.allclose(final_tot, joint_margin, atol=atol, rtol=rtol)
+
+    # cells with a positive target but no sampled support cannot be matched
+    unsupported = (joint_margin > 0) & (tot == 0)
+    if unsupported.any():
+        warnings.warn(
+            f"stage1_rake: {int(unsupported.sum())} target cell(s) have no sampled "
+            f"support; their target mass cannot be matched.",
+            RuntimeWarning,
+        )
+
+    if not converged:
+        warnings.warn(
+            "stage1_rake did not converge within tolerance.\n"
+            f"Joint max abs diff: {joint_abs:.6g}\n"
+            f"atol={atol}, rtol={rtol}",
+            RuntimeWarning,
+        )
+
+    diag = {
+        "converged": converged,
+        "joint_max_abs_diff": joint_abs,
+        "atol": atol,
+        "rtol": rtol,
+        "unsupported_cells": int(unsupported.sum()),
+    }
+
+    return weights, diag
+
+
 def stage2_rake(
     sampled_row_codes,           # (N,) int codes for joint demo cell g in 0..G-1
     sampled_col_codes,
