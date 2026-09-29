@@ -263,11 +263,19 @@ Helpers used by the example pipeline; available for direct use if you have
 your need to write your own data processing.
 
 - **ATUS sequence metrics**
-  - `sequence_metrics(seq, home_label, work_label, all_labels)` : extract
-    behavioral metrics (activity counts, turnover, reciprocity, durations,
-    transitions) from a single daily sequence. (To be used in distance matrix calculations)
-  - `compute_metrics_for_all_sequences(sequences, ...)` : apply over many
-    sequences; returns one row per sequence.
+  - `sequence_metrics(seq, all_labels)` : extract behavioral metrics from a
+    single daily sequence: number of distinct activities, turnover rate,
+    reciprocity, activity entropy (natural log), time share per label in
+    `all_labels`, and transition counts for every ordered pair of labels
+    (`edge_(a, b)`; all `len(all_labels)²` pairs are always present, zero if
+    unobserved). (To be used in distance matrix calculations)
+  - `compute_metrics_for_all_sequences(sequences, all_labels)` : apply over
+    many sequences; returns one row per sequence.
+  - `normalize_sequence_metrics(metrics_df, all_labels)` : optional, separate
+    rescaling step so features are on comparable [0, 1] scales before cosine
+    distance: `num_activities / len(all_labels)`, `entropy / log(len(all_labels))`,
+    and edge counts divided by their row total. Apply to both
+    mobility-derived metrics and ATUS-derived metrics or neither.
   - `metrics_cosine_D(metrics_df1, metrics_df2)` : pairwise cosine-distance
     matrix between two metric tables.
 - **Weighted k-medoids clustering**

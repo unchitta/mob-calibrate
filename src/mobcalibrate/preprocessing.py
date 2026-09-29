@@ -9,22 +9,22 @@ from .utils import weighted_crosstab, align_idx, make_joint_code
 
 # =============== SEQUENCE METRICS FOR CLUSTERING TUS DATA ================
 
-def sequence_metrics(seq, home_label, work_label, all_labels):
-    
+def sequence_metrics(seq, all_labels):
+
     """
     Compute behavioural sequence metrics for a single daily activity sequence.
 
     Args:
         seq (list): A list of activity labels (e.g. ["Home","Work","Work","Commute"...])
-        home_label (str): Label used for "Home" activity
-        work_label (str): Label used for "Work" activity
         all_labels (list): list of all possible activity labels in the alphabet
 
     Returns:
-        dict: A dictionary with metrics
+        dict: A dictionary with metrics. Edge counts are included for every ordered
+        pair of labels in all_labels (zero if the transition is not observed).
     """
 
     from collections import Counter
+    from itertools import product
 
     ################## HELPERS #####################
     # Helper: find runs/spells
@@ -93,6 +93,10 @@ def sequence_metrics(seq, home_label, work_label, all_labels):
     transitions = sum(1 for i in range(1, n) if seq[i] != seq[i - 1])
     turnover_rate = transitions / (n - 1) if n > 1 else 0
 
+    # Entropy (natural log) of the activity distribution
+    probs = np.array(list(counts.values())) / n
+    activity_entropy = float((probs * np.log(1 / probs)).sum())
+
     # Reciprocity
     runs = _compute_runs(seq)
     reciprocity, edges = _compute_reciprocity(runs)
@@ -101,32 +105,64 @@ def sequence_metrics(seq, home_label, work_label, all_labels):
     res = {
         "num_activities": num_activities,
         "turnover_rate": turnover_rate,
-        "reciprocity": reciprocity
+        "reciprocity": reciprocity,
+        "entropy": activity_entropy
     }
 
     # Durations as Time Use
     for k, v in durations.items():
         res[k] = v
 
-    # Edges
+    # Edges (all possible pairs, then any observed pairs outside all_labels)
+    for pair in product(all_labels, repeat=2):
+        res[f"edge_{pair}"] = edges.get(pair, 0)
     for k, v in edges.items():
         res[f"edge_{k}"] = v
 
     return res
 
 
-def compute_metrics_for_all_sequences(sequences, home_label, work_label, all_labels):
+def compute_metrics_for_all_sequences(sequences, all_labels):
     """
     Runs sequence_metrics() for each seq in sequences
     Returns a DataFrame with each row containing metrics of the corresponding row in sequences
     """
     metrics = []
     for s in sequences:
-        m = sequence_metrics(s, home_label, work_label, all_labels)
+        m = sequence_metrics(s, all_labels)
         metrics.append(m)
     seq_metrics = pd.DataFrame(metrics).fillna(0)
 
     return seq_metrics
+
+
+def normalize_sequence_metrics(metrics_df, all_labels):
+    """
+    Rescales the output of compute_metrics_for_all_sequences() so features are
+    on comparable [0, 1] scales before computing cosine distances.
+
+    - num_activities is divided by the number of labels
+    - entropy is divided by its maximum, log(number of labels)
+    - edge counts are divided by their row total (proportions of transitions)
+
+    Time use, turnover_rate and reciprocity are already in [0, 1] and are left as is.
+    Each row is rescaled independently. Apply to both mobility-derived metrics
+    and ATUS-derived metrics or neither.
+
+    Returns a normalized copy of metrics_df.
+    """
+    out = metrics_df.copy()
+    n_labels = len(all_labels)
+
+    out["num_activities"] = out["num_activities"] / n_labels
+    if n_labels > 1:
+        out["entropy"] = out["entropy"] / np.log(n_labels)
+
+    edge_cols = [c for c in out.columns if str(c).startswith("edge_")]
+    edge_tot = out[edge_cols].sum(axis=1)
+    out[edge_cols] = out[edge_cols].div(edge_tot.where(edge_tot > 0, 1), axis=0)
+
+    return out
 
 
 def metrics_cosine_D(metrics_df1, metrics_df2):
