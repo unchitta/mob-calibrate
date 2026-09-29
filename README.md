@@ -76,17 +76,22 @@ The example pipeline under [examples/](examples/) additionally uses
 also works and is used automatically if installed), and `ipykernel` (to run
 the notebooks in Jupyter or VS Code).
 
-**Install them with the `examples` extra when you intend to run the notebooks**:
+**Install them with the `examples` or `examples-with-jupyter` extra when you intend to run the notebooks**:
 
 ```bash
 pip install -e ".[examples]"
+```
+
+```bash
+pip install -e ".[examples-with-jupyter]"
 ```
 
 Tested with Python 3.11, with numpy 1.24–2.4, pandas 2.3–3.0,
 scikit-learn 1.2–1.9, tqdm 4.65–4.70, scipy 1.10–1.17, matplotlib 3.7–3.11,
 seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files.
 
-Tested on: Ubuntu Server 18.04, MacOs Tahoe 26.6.2
+Tested on: Ubuntu Server 18.04 and MacOs Tahoe 26.6.2.
+
 No non-standard hardware is required.
 
 
