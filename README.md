@@ -50,26 +50,36 @@ cluster label    │  Stage 2: rake within each joint stratum             │ �
 
 ## Installation
 
+Install directly from GitHub:
+
 ```bash
-# from PyPI
-pip install mobcalibrate
+pip install "git+https://github.com/unchitta/mob-calibrate.git"
+
+# with the example dependencies:
+pip install "mobcalibrate[examples] @ git+https://github.com/unchitta/mob-calibrate.git"
 
 # or from a clone, for development / latest main
-git clone https://github.com/unchitta/mobcalibrate.git
-cd mobcalibrate
+git clone https://github.com/unchitta/mob-calibrate.git
+cd mob-calibrate
 pip install -e .
 ```
 
-Requires Python ≥ 3.9. The package's runtime dependencies are `numpy` and
-`pandas` (see [pyproject.toml](pyproject.toml)).
+Requires Python ≥ 3.9. The package's runtime dependencies are `numpy`,
+`pandas`, `scikit-learn`, and `tqdm` (see [pyproject.toml](pyproject.toml)).
 
 The example pipeline under [examples/](examples/) additionally uses
-`scipy`, `scikit-learn`, `matplotlib`, and `fastparquet`. Install those alongside
-when you intend to run the notebooks:
+`scipy`, `matplotlib`, `seaborn`, `fastparquet` (for parquet files; `pyarrow`
+also works and is used automatically if installed), and `ipykernel` (to run
+the notebooks in Jupyter or VS Code).
+**Install them with the `examples` extra when you intend to run the notebooks**:
 
 ```bash
-pip install scipy scikit-learn matplotlib fastparquet
+pip install -e ".[examples]"
 ```
+
+Tested with Python 3.11, with numpy 1.24–2.4, pandas 2.3–3.0,
+scikit-learn 1.2–1.9, tqdm 4.65–4.70, scipy 1.10–1.17, matplotlib 3.7–3.11,
+seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files.
 
 
 

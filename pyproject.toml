@@ -10,7 +10,18 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
-    "pandas"
+    "pandas",
+    "scikit-learn",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+examples = [
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "fastparquet",
+    "ipykernel",
 ]
 
 [tool.setuptools]
