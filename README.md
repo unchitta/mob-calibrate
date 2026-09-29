@@ -21,32 +21,8 @@ ACS/ATUS files and mobility sequences into inputs that can be fed into the Calib
 
 Please refer to our paper for more details about the method and for citation:
 ```
-paper citation here
+paper citation forthcoming
 ```
-
-
-## Method overview
-
-`mobcalibrate` runs a two-stage calibration:
-
-```
-                 ┌──────────────── per CBG joint priors ────────────────┐
-home CBG ──────► │  Stage 1: joint IPF on ACS marginals                 │ ──► weight1
-cluster label    │  Stage 2: rake within each joint stratum             │ ──► weight_final
-                 │           to ATUS-derived P(cluster | stratum)       │
-                 └──────────────────────────────────────────────────────┘
-```
-
-- **Stage 1 (`stage1_ipf`).** For each replicate, demographic codes are sampled
-  per unit from per-CBG joint distributions, then iterative proportional
-  fitting rakes initial uniform weights to the two ACS marginals (e.g. an age
-  vector and an income vector for the CBSA). Each replicate will have different Stage 1 weights due to random sampling. These weights are propagated to the second stage in each replicate, also resulting in different final weights across replicates.
-- **Stage 2 (`stage2_rake`).** Within each demographic stratum, weights from the previous stage are raked again so the weighted distribution of behavioral cluster labels
-  matches an ATUS-derived target table (`P(cluster | stratum)`). Units with
-  cluster label `-1` are treated as unassigned and excluded from Stage 2. Their weights are then transferred to other individuals within the same cluster and stratum at the end (similar to non-response adjustment in traditional survey weighting).
-- **Replicates.** `num_replicates` independent weight sets are produced from
-  spawned RNG streams. For example, if `num_replicates` is set to 50, then each individual in the sample will have 50 values of weights to account for the demographic sampling uncertainty. These replicate weights should be used for variance estimation when presenting mobility estimates.
-
 
 ## Installation
 
@@ -81,6 +57,35 @@ Tested with Python 3.11, with numpy 1.24–2.4, pandas 2.3–3.0,
 scikit-learn 1.2–1.9, tqdm 4.65–4.70, scipy 1.10–1.17, matplotlib 3.7–3.11,
 seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files.
 
+
+## Demo run
+
+We've included synthetic and public data necessary to run the pipeline from end to end in `examples/`. **After installation, use `examples/quickstart_synthetic.ipynb` to demo the package.** Optionally, explore other notebooks for a better understanding of the pipeline.
+
+Runtime for the demo on a standard laptop should take no longer than 3-5 minutes (and may be much faster). Runtime on actual data will depend on the size of your mobility data set.
+
+
+## Method overview
+
+`mobcalibrate` runs a two-stage calibration:
+
+```
+                 ┌──────────────── per CBG joint priors ────────────────┐
+home CBG ──────► │  Stage 1: joint IPF on ACS marginals                 │ ──► weight1
+cluster label    │  Stage 2: rake within each joint stratum             │ ──► weight_final
+                 │           to ATUS-derived P(cluster | stratum)       │
+                 └──────────────────────────────────────────────────────┘
+```
+
+- **Stage 1 (`stage1_ipf`).** For each replicate, demographic codes are sampled
+  per unit from per-CBG joint distributions, then iterative proportional
+  fitting rakes initial uniform weights to the two ACS marginals (e.g. an age
+  vector and an income vector for the CBSA). Each replicate will have different Stage 1 weights due to random sampling. These weights are propagated to the second stage in each replicate, also resulting in different final weights across replicates.
+- **Stage 2 (`stage2_rake`).** Within each demographic stratum, weights from the previous stage are raked again so the weighted distribution of behavioral cluster labels
+  matches an ATUS-derived target table (`P(cluster | stratum)`). Units with
+  cluster label `-1` are treated as unassigned and excluded from Stage 2. Their weights are then transferred to other individuals within the same cluster and stratum at the end (similar to non-response adjustment in traditional survey weighting).
+- **Replicates.** `num_replicates` independent weight sets are produced from
+  spawned RNG streams. For example, if `num_replicates` is set to 50, then each individual in the sample will have 50 values of weights to account for the demographic sampling uncertainty. These replicate weights should be used for variance estimation when presenting mobility estimates.
 
 
 ## Inputs you'll need (assuming U.S.-based panels)
