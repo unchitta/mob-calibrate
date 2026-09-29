@@ -24,8 +24,22 @@ Released under the MIT License. See [LICENSE](LICENSE).
 ## Reference
 
 Please refer to our paper for more details about the method and for citation:
-```
-paper citation forthcoming
+
+Girardini, N. A., Kan, U., López, E., Lepri, B., Lucchini, L., & Centellegher, S. (2026).
+*Behavioral calibration of mobile-phone GPS data for population-representative analyses*.
+arXiv:2609.01042. [https://arxiv.org/abs/2609.01042](https://arxiv.org/abs/2609.01042)
+
+```bibtex
+@misc{girardini2026behavioral,
+  title         = {Behavioral calibration of mobile-phone GPS data for population-representative analyses},
+  author        = {Girardini, Nicol{\`o} Alessandro and Kan, Unchitta and L{\'o}pez, Eduardo and Lepri, Bruno and Lucchini, Lorenzo and Centellegher, Simone},
+  year          = {2026},
+  eprint        = {2609.01042},
+  archivePrefix = {arXiv},
+  primaryClass  = {physics.soc-ph},
+  doi           = {10.48550/arXiv.2609.01042},
+  url           = {https://arxiv.org/abs/2609.01042}
+}
 ```
 
 ## Questions?
@@ -40,8 +54,11 @@ Install directly from GitHub:
 ```bash
 pip install "git+https://github.com/unchitta/mob-calibrate.git"
 
-# with the example dependencies:
+# with the example dependencies (+ ipykernel):
 pip install "mobcalibrate[examples] @ git+https://github.com/unchitta/mob-calibrate.git"
+
+# with the example dependencies (+ ipykernel *AND* jupyter):
+pip install "mobcalibrate[examples-with-jupyter] @ git+https://github.com/unchitta/mob-calibrate.git"
 
 # or from a clone, for development / latest main
 git clone https://github.com/unchitta/mob-calibrate.git
@@ -56,6 +73,7 @@ The example pipeline under [examples/](examples/) additionally uses
 `scipy`, `matplotlib`, `seaborn`, `fastparquet` (for parquet files; `pyarrow`
 also works and is used automatically if installed), and `ipykernel` (to run
 the notebooks in Jupyter or VS Code).
+
 **Install them with the `examples` extra when you intend to run the notebooks**:
 
 ```bash
@@ -65,6 +83,9 @@ pip install -e ".[examples]"
 Tested with Python 3.11, with numpy 1.24–2.4, pandas 2.3–3.0,
 scikit-learn 1.2–1.9, tqdm 4.65–4.70, scipy 1.10–1.17, matplotlib 3.7–3.11,
 seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files.
+
+Tested on: Ubuntu Server 18.04, MacOs Tahoe 26.6.2
+No non-standard hardware is required.
 
 
 ## Demo run
