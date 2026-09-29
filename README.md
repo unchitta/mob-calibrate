@@ -66,6 +66,8 @@ cd mob-calibrate
 pip install -e .
 ```
 
+Requires pip 21.2 or later.
+
 Requires Python ≥ 3.9. The package's runtime dependencies are `numpy`,
 `pandas`, `scikit-learn`, and `tqdm` (see [pyproject.toml](pyproject.toml)).
 
