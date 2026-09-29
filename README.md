@@ -21,8 +21,48 @@ ACS/ATUS files and mobility sequences into inputs that can be fed into the Calib
 
 Please refer to our paper for more details about the method and for citation:
 ```
-paper citation here
+paper citation forthcoming
 ```
+
+## Installation
+
+Install directly from GitHub:
+
+```bash
+pip install "git+https://github.com/unchitta/mob-calibrate.git"
+
+# with the example dependencies:
+pip install "mobcalibrate[examples] @ git+https://github.com/unchitta/mob-calibrate.git"
+
+# or from a clone, for development / latest main
+git clone https://github.com/unchitta/mob-calibrate.git
+cd mob-calibrate
+pip install -e .
+```
+
+Requires Python ≥ 3.9. The package's runtime dependencies are `numpy`,
+`pandas`, `scikit-learn`, and `tqdm` (see [pyproject.toml](pyproject.toml)).
+
+The example pipeline under [examples/](examples/) additionally uses
+`scipy`, `matplotlib`, `seaborn`, `fastparquet` (for parquet files; `pyarrow`
+also works and is used automatically if installed), and `ipykernel` (to run
+the notebooks in Jupyter or VS Code).
+**Install them with the `examples` extra when you intend to run the notebooks**:
+
+```bash
+pip install -e ".[examples]"
+```
+
+Tested with Python 3.11, with numpy 1.24–2.4, pandas 2.3–3.0,
+scikit-learn 1.2–1.9, tqdm 4.65–4.70, scipy 1.10–1.17, matplotlib 3.7–3.11,
+seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files.
+
+
+## Demo run
+
+We've included synthetic and public data necessary to run the pipeline from end to end in `examples/`. **After installation, use `examples/quickstart_synthetic.ipynb` to demo the package.** Optionally, explore other notebooks for a better understanding of the pipeline.
+
+Runtime for the demo on a standard laptop should take no longer than 3-5 minutes (and may be much faster). Runtime on actual data will depend on the size of your mobility data set.
 
 
 ## Method overview
@@ -46,31 +86,6 @@ cluster label    │  Stage 2: rake within each joint stratum             │ �
   cluster label `-1` are treated as unassigned and excluded from Stage 2. Their weights are then transferred to other individuals within the same cluster and stratum at the end (similar to non-response adjustment in traditional survey weighting).
 - **Replicates.** `num_replicates` independent weight sets are produced from
   spawned RNG streams. For example, if `num_replicates` is set to 50, then each individual in the sample will have 50 values of weights to account for the demographic sampling uncertainty. These replicate weights should be used for variance estimation when presenting mobility estimates.
-
-
-## Installation
-
-```bash
-# from PyPI
-pip install mobcalibrate
-
-# or from a clone, for development / latest main
-git clone https://github.com/unchitta/mobcalibrate.git
-cd mobcalibrate
-pip install -e .
-```
-
-Requires Python ≥ 3.9. The package's runtime dependencies are `numpy` and
-`pandas` (see [pyproject.toml](pyproject.toml)).
-
-The example pipeline under [examples/](examples/) additionally uses
-`scipy`, `scikit-learn`, `matplotlib`, and `fastparquet`. Install those alongside
-when you intend to run the notebooks:
-
-```bash
-pip install scipy scikit-learn matplotlib fastparquet
-```
-
 
 
 ## Inputs you'll need (assuming U.S.-based panels)
@@ -263,11 +278,19 @@ Helpers used by the example pipeline; available for direct use if you have
 your need to write your own data processing.
 
 - **ATUS sequence metrics**
-  - `sequence_metrics(seq, home_label, work_label, all_labels)` : extract
-    behavioral metrics (activity counts, turnover, reciprocity, durations,
-    transitions) from a single daily sequence. (To be used in distance matrix calculations)
-  - `compute_metrics_for_all_sequences(sequences, ...)` : apply over many
-    sequences; returns one row per sequence.
+  - `sequence_metrics(seq, all_labels)` : extract behavioral metrics from a
+    single daily sequence: number of distinct activities, turnover rate,
+    reciprocity, activity entropy (natural log), time share per label in
+    `all_labels`, and transition counts for every ordered pair of labels
+    (`edge_(a, b)`; all `len(all_labels)²` pairs are always present, zero if
+    unobserved). (To be used in distance matrix calculations)
+  - `compute_metrics_for_all_sequences(sequences, all_labels)` : apply over
+    many sequences; returns one row per sequence.
+  - `normalize_sequence_metrics(metrics_df, all_labels)` : optional, separate
+    rescaling step so features are on comparable [0, 1] scales before cosine
+    distance: `num_activities / len(all_labels)`, `entropy / log(len(all_labels))`,
+    and edge counts divided by their row total. Apply to both
+    mobility-derived metrics and ATUS-derived metrics or neither.
   - `metrics_cosine_D(metrics_df1, metrics_df2)` : pairwise cosine-distance
     matrix between two metric tables.
 - **Weighted k-medoids clustering**
@@ -312,6 +335,7 @@ mobcalibrate/
 
 ## License
 
+Released under the MIT License. See [LICENSE](LICENSE).
 
 ## Questions?
 

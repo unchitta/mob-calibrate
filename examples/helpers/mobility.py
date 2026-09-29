@@ -3,6 +3,7 @@ import pandas as pd
 
 from mobcalibrate.preprocessing import (
     compute_metrics_for_all_sequences,
+    normalize_sequence_metrics,
     metrics_cosine_D,
 )
 from .atus import select_feature_subset
@@ -18,10 +19,11 @@ def distance_to_atus(mob_seq, atus_metrics, sequence_metric_specs,
     sequence_metric_specs that was used to process ATUS should be passed
     to this function. (compute_metrics_for_all_sequences is called here)
 
-    This function then streamlines computing mobility metrics, aligns the metric
-    columns with atus_metrics, and calculate distance matrix using 
-    the same feature subset in both datasets.
-    
+    This function then streamlines computing mobility metrics, normalizes them
+    if sequence_metric_specs['normalize'] is True, aligns the metric columns
+    with atus_metrics, and calculates the distance matrix using the same
+    feature subset in both datasets.
+
     Edge columns observed in one dataset but not the other are padded with 0
     so both sides share the same feature space.
 
@@ -31,9 +33,11 @@ def distance_to_atus(mob_seq, atus_metrics, sequence_metric_specs,
         User-day mobility sequences. Must contain `sequence_cols` (one cell per
         T-min interval) and a `geoid_col` column for the user's home CBG.
     atus_metrics : pd.DataFrame
-        Full feature table returned by `atus.cluster_sequences`.
+        Full feature table returned by `atus.cluster_sequences`, called with the
+        same sequence_metric_specs. If 'normalize' is True, these metrics are
+        already normalized there, so only the mobility metrics are normalized here.
     sequence_metric_specs : dict
-        dict with keys 'home_label', 'work_label', 'all_labels', 'feature_subset'. 
+        dict with keys 'all_labels', 'feature_subset' and 'normalize'.
         Must be the same dict passed to `atus.cluster_sequences`.
     sequence_cols : list[str]
         Column names in mob_seq that contain the activity cells.
@@ -48,19 +52,19 @@ def distance_to_atus(mob_seq, atus_metrics, sequence_metric_specs,
     """
 
 
-    home_label = sequence_metric_specs['home_label']
-    work_label = sequence_metric_specs['work_label']
     all_labels = sequence_metric_specs['all_labels']
     feature_subset = sequence_metric_specs.get('feature_subset', 'all')
+    normalize = sequence_metric_specs.get('normalize', False)
 
     # compute features on the mobility side using the same spec as ATUS
     mob_metrics = compute_metrics_for_all_sequences(
         mob_seq[sequence_cols].values,
-        home_label=home_label,
-        work_label=work_label,
         all_labels=all_labels,
     )
     mob_metrics.index = mob_seq.index
+
+    if normalize:
+        mob_metrics = normalize_sequence_metrics(mob_metrics, all_labels)
 
     # align the two feature spaces: pad missing columns with 0, use atus column
     # order as canonical and append any mobility-only columns at the end

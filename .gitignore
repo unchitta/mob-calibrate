@@ -2,6 +2,8 @@
 # Data (local, large, or sensitive)
 # --------------------------------------------------
 # Ignore all data files in examples/data
+# Except for directory placeholders / documentation and public files
+# (this is to act as a guide to keep directory structure neat)
 examples/data/**
 !examples/data/
 !examples/data/**/
@@ -10,9 +12,9 @@ examples/data/**
 !examples/data/acs/ACS5Y2020/**/
 !examples/data/acs/ACS5Y2020/*/
 !examples/data/acs/ACS5Y2020/*/*
-# Except for directory placeholders / documentation
-# (this is to act as a guide to keep directory structure neat)
 !examples/data/**/README.md
+!examples/data/mobility/
+!examples/data/mobility/synthetic_mobility_38060.csv
 #examples/data/processed/
 #examples/data/results/
 

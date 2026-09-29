@@ -603,14 +603,14 @@ def select_feature_subset(metrics_df, feature_subset, all_labels):
 
     feature_subset : one of
         'all'          → return every column unchanged
-        'metrics_only' → just num_activities, turnover_rate, reciprocity
+        'metrics_only' → just num_activities, turnover_rate, reciprocity, entropy
         'tu_only'      → just the time-use duration columns (one per label in all_labels)
         'edges_only'   → just the edge-transition columns (names starting with 'edge_')
     """
     if feature_subset == 'all':
         return metrics_df
     if feature_subset == 'metrics_only':
-        cols = ['num_activities', 'turnover_rate', 'reciprocity']
+        cols = ['num_activities', 'turnover_rate', 'reciprocity', 'entropy']
         return metrics_df[[c for c in cols if c in metrics_df.columns]]
     if feature_subset == 'tu_only':
         cols = [c for c in all_labels if c in metrics_df.columns]
@@ -659,12 +659,15 @@ def cluster_sequences(atus_seq, weights, K, sequence_metric_specs,
     Clusters sequences using weighted k-medoids, streamlining calculation of sequence metrics
     Returns atus metrics, cluster results, and medoid thresholds.
 
-    The feature_subset in sequence_metric_specs is applied to the metrics DataFrame
+    If sequence_metric_specs['normalize'] is True, the metrics are rescaled with
+    normalize_sequence_metrics() before any distance computation.
+    The feature_subset in sequence_metric_specs is then applied to the metrics DataFrame
     before distance computation; the full (unsubsetted) metrics are returned so
     that `mobility.distance_to_atus` can re-apply the same subset.
 
     This function calls
         - compute_metrics_for_all_sequences()
+        - normalize_sequence_metrics() (only if sequence_metric_specs['normalize'] is True)
         - metrics_cosine_D()
         - fit_weighted_kmedoids_with_restarts()
         - compute_dist_to_medoid_thresholds()
@@ -678,7 +681,11 @@ def cluster_sequences(atus_seq, weights, K, sequence_metric_specs,
     K : int
         Number of clusters.
     sequence_metric_specs : dict with keys
-        'home_label', 'work_label', 'all_labels', 'feature_subset'.
+        'all_labels'     : list of activity labels in the sequence alphabet.
+        'feature_subset' : 'all' | 'metrics_only' | 'tu_only' | 'edges_only' (default 'all').
+        'normalize'      : bool (default False). If True, rescale the metrics with
+                           normalize_sequence_metrics(). Pass the same dict to
+                           `mobility.distance_to_atus` so both sides are treated alike.
     seed : int or None
         Random seed for the k-medoids restarts.
     n_restarts : int
@@ -686,7 +693,8 @@ def cluster_sequences(atus_seq, weights, K, sequence_metric_specs,
     Returns
     -------
     atus_metrics : pd.DataFrame
-        Full feature table indexed like atus_seq (not subsetted).
+        Full feature table indexed like atus_seq (not subsetted; normalized if
+        sequence_metric_specs['normalize'] is True).
     cluster_results : dict
         {'medoids', 'labels', 'inertia', 'seed'} from
         fit_weighted_kmedoids_with_restarts.
@@ -696,24 +704,25 @@ def cluster_sequences(atus_seq, weights, K, sequence_metric_specs,
 
     from mobcalibrate.preprocessing import (
         compute_metrics_for_all_sequences,
+        normalize_sequence_metrics,
         metrics_cosine_D,
         fit_weighted_kmedoids_with_restarts,
         compute_dist_to_medoid_thresholds,
     )
 
-    home_label = sequence_metric_specs['home_label']
-    work_label = sequence_metric_specs['work_label']
     all_labels = sequence_metric_specs['all_labels']
     feature_subset = sequence_metric_specs.get('feature_subset', 'all')
+    normalize = sequence_metric_specs.get('normalize', False)
 
     # full feature table — returned to caller and used downstream by mobility.distance_to_atus
     atus_metrics = compute_metrics_for_all_sequences(
         atus_seq.values,
-        home_label=home_label,
-        work_label=work_label,
         all_labels=all_labels,
     )
     atus_metrics.index = atus_seq.index
+
+    if normalize:
+        atus_metrics = normalize_sequence_metrics(atus_metrics, all_labels)
 
     # subset applied to clustering distance matrix
     metrics_for_dist = select_feature_subset(atus_metrics, feature_subset, all_labels)
