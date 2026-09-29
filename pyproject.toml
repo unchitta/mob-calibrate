@@ -25,6 +25,11 @@ examples = [
     "ipykernel",
 ]
 
+examples-with-jupyter = [
+    "mobcalibrate[examples]",
+    "jupyter",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
