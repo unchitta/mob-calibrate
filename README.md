@@ -17,12 +17,21 @@ ACS/ATUS files and mobility sequences into inputs that can be fed into the Calib
 
 **Note:** for mobility samples in other, non-U.S. countries, please follow the example notebooks and replace the ACS/ATUS data with appropriate corresponding data sources. Many of the preprocessing helpers are written with ACS/ATUS in mind, but please feel free to adapt them for your particular use cases.
 
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE).
+
 ## Reference
 
 Please refer to our paper for more details about the method and for citation:
 ```
 paper citation forthcoming
 ```
+
+## Questions?
+
+Please email Unchitta Kan at ukanjana@gmu.edu.
+
 
 ## Installation
 
@@ -61,6 +70,8 @@ seaborn 0.12–0.13, and pyarrow 22–25 or fastparquet 2026.9 for parquet files
 ## Demo run
 
 We've included synthetic and public data necessary to run the pipeline from end to end in `examples/`. **After installation, use `examples/quickstart_synthetic.ipynb` to demo the package.** Optionally, explore other notebooks for a better understanding of the pipeline.
+
+**Note:** the raw ATUS data files are not included in the repository due to their size. Download them before running the demo by following the instructions in [examples/data/atus/README.md](examples/data/atus/README.md).
 
 Runtime for the demo on a standard laptop should take no longer than 3-5 minutes (and may be much faster). Runtime on actual data will depend on the size of your mobility data set.
 
@@ -222,24 +233,33 @@ All weights are scaled to `target_pop_tot` and stored as `int64`.
 
 
 
-## quickstart.ipynb and walkthrough notebooks
+## Quickstart and walkthrough notebooks
 
-For a worked example covering ACS prep, ATUS prep, mobility-cluster
-assignment, and calibration:
+Start-to-finish examples (change paths and parameters in the config cells and run):
 
-- **[examples/quickstart.ipynb](examples/quickstart.ipynb)** : start to finish example in one notebook. Change paths and parameters in the config cells and run.
+- **[examples/quickstart_synthetic.ipynb](examples/quickstart_synthetic.ipynb)** : demo on the
+  included synthetic mobility data. Computes the mobility-ATUS distance matrix in the notebook
+  and ends with an example time-use comparison (uncalibrated vs calibrated vs ATUS).
+- **[examples/quickstart.ipynb](examples/quickstart.ipynb)** : the same pipeline for real
+  mobility data. Since real mobility sequences cannot be shared, it loads a precomputed
+  mobility-ATUS distance matrix (or computes one from your own sequences).
 
 For inspecting and learning more about the individual stages:
 
+- [examples/walkthrough_01_process_mobility.ipynb](examples/walkthrough_01_process_mobility.ipynb)
+  : expected format of processed mobility sequences (placeholder; no processing code due to data agreement).
 - [examples/walkthrough_02_process_acs.ipynb](examples/walkthrough_02_process_acs.ipynb)
   : ACS table prep with intermediate diagnostics.
 - [examples/walkthrough_03_process_atus.ipynb](examples/walkthrough_03_process_atus.ipynb)
   : ATUS sequence building, k-medoids clustering, tempograms.
+- [examples/walkthrough_04_distance_matrix.ipynb](examples/walkthrough_04_distance_matrix.ipynb)
+  : sequence metrics, normalization, and the mobility-ATUS cosine distance matrix.
 - [examples/walkthrough_05_run_calibration.ipynb](examples/walkthrough_05_run_calibration.ipynb)
   : calibration step with extra diagnostics.
 
 See [examples/README.md](examples/README.md) for an index.
 
+Also, please remember to place your data files into the examples/data/ directories as appropriate.
 
 
 
@@ -324,19 +344,10 @@ mobcalibrate/
 │   ├── core.py                # internal: CDF sampling, IPF, raking
 │   └── utils.py               # internal: small array utilities
 ├── examples/
-│   ├── quickstart.ipynb       # start to finish example
-│   ├── walkthrough_*.ipynb    # walkthroughs for individual processing stages
-│   ├── helpers/               # ACS/ATUS/mobility data-prep helpers
-│   └── data/                  # raw + processed + results dirs
+│   ├── quickstart.ipynb            # start to finish example
+│   ├── quickstart_synthetic.ipynb  # demo on synthetic mobility data
+│   ├── walkthrough_*.ipynb         # walkthroughs for individual processing stages
+│   ├── helpers/                    # ACS/ATUS/mobility data-prep helpers
+│   └── data/                       # raw + processed + results dirs
 └── pyproject.toml
 ```
-
-
-
-## License
-
-Released under the MIT License. See [LICENSE](LICENSE).
-
-## Questions?
-
-Please email Unchitta Kan at ukanjana@gmu.edu.
